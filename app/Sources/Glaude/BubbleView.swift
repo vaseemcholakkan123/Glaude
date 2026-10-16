@@ -7,10 +7,24 @@ extension Color {
     static let diffRemoved = Color(red: 0.90, green: 0.33, blue: 0.30)
 }
 
+/// Whether the bubble is out or tucked into the screen edge as a slim tab, for the
+/// "only when Claude needs you" setting.
+final class BubbleDock: ObservableObject {
+    @Published var collapsed = false
+    /// A brief green glow on the tab when a session finishes while collapsed.
+    @Published var glow = false
+    @Published var onLeftEdge = false
+
+    static let tabSize = NSSize(width: 14, height: 56)
+    static let bubbleSize = NSSize(width: 64, height: 64)
+}
+
 /// The floating 48pt button: idle (faded), working (spinning ring),
 /// needs you (orange, pulsing), done (green check until you look).
 struct BubbleView: View {
     @ObservedObject var store: SessionStore
+    @ObservedObject var dock: BubbleDock
+    let onHover: (Bool) -> Void
     // Explicit State/FocusState values instead of the @State/@FocusState macros, which
     // newer SDKs implement in a compiler plugin that the Command Line Tools don't ship.
     private let hoveringState = State<Bool>(initialValue: false)
@@ -20,9 +34,20 @@ struct BubbleView: View {
     }
 
     var body: some View {
+        if dock.collapsed {
+            EdgeTab(state: store.aggregateState, glow: dock.glow, onLeftEdge: dock.onLeftEdge)
+                .contentShape(Rectangle())
+                .onHover { onHover($0) }
+                .help(helpText(store.aggregateState))
+        } else {
+            bubble
+        }
+    }
+
+    private var bubble: some View {
         let state = store.aggregateState
         let animating = state == .working || state == .needsYou
-        TimelineView(.animation(paused: !animating)) { timeline in
+        return TimelineView(.animation(paused: !animating)) { timeline in
             let t = timeline.date.timeIntervalSinceReferenceDate
             ZStack(alignment: .topTrailing) {
                 face(state, t: t)
@@ -43,7 +68,8 @@ struct BubbleView: View {
         .frame(width: 64, height: 64)
         .opacity(state == .idle && !hovering ? 0.55 : 1)
         .animation(.easeInOut(duration: 0.25), value: state)
-        .onHover { hovering = $0 }
+        .contentShape(Rectangle())
+        .onHover { hovering = $0; onHover($0) }
         .help(helpText(state))
     }
 
@@ -97,6 +123,28 @@ struct BubbleView: View {
         case .needsYou: return "Claude needs you"
         case .done: return "Claude finished"
         }
+    }
+}
+
+/// The collapsed bubble: a slim pill in the screen edge, glowing green when a session
+/// finishes and breathing while Claude works. Hover or click to bring the bubble out.
+private struct EdgeTab: View {
+    let state: SessionState
+    let glow: Bool
+    let onLeftEdge: Bool
+
+    var body: some View {
+        TimelineView(.animation(paused: state != .working || glow)) { timeline in
+            let breath = 0.55 + 0.25 * sin(timeline.date.timeIntervalSinceReferenceDate * 2.5)
+            Capsule()
+                .fill(glow ? Color.glaudeDone : state == .working ? Color.glaudeAccent.opacity(breath) : Color.secondary.opacity(0.45))
+                .frame(width: 5, height: 40)
+                .shadow(color: glow ? Color.glaudeDone.opacity(0.9) : .clear, radius: glow ? 7 : 0)
+                .animation(.easeInOut(duration: 0.3), value: glow)
+        }
+        .frame(width: BubbleDock.tabSize.width, height: BubbleDock.tabSize.height,
+               alignment: onLeftEdge ? .leading : .trailing)
+        .padding(onLeftEdge ? .leading : .trailing, 1)
     }
 }
 

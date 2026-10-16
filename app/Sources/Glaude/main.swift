@@ -75,6 +75,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var dragStart: (mouse: NSPoint, origin: NSPoint)?
     private var outsideClickMonitor: Any?
     private let hotkeys = Hotkeys()
+    private let dock = BubbleDock()
+    private var bubbleHovering = false
+    private var collapseWork: DispatchWorkItem?
+
+    /// "Bubble: Only When Claude Needs You": tucked into the screen edge otherwise.
+    private var bubbleOnlyWhenNeeded: Bool {
+        get { UserDefaults.standard.string(forKey: "bubblePresence") == "whenNeeded" }
+        set { UserDefaults.standard.set(newValue ? "whenNeeded" : "always", forKey: "bubblePresence") }
+    }
     private var notifier: Notifier!
     /// Sessions with a "needs you" notification up, to take down once they're answered.
     private var notifiedNeedsYou: Set<String> = []
@@ -103,6 +112,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             DispatchQueue.main.async {
                 self?.dropResolvedNeedsYouPeek()
                 self?.dropResolvedNotifications()
+                self?.updateBubblePresence()
             }
         }
         .store(in: &cancellables)
@@ -137,8 +147,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func setUpBubble() {
         bubble = FloatingPanel(size: NSSize(width: 64, height: 64))
         bubble.hasShadow = false
-        let view = BubbleView(store: store)
-            .contentShape(Circle())
+        let view = BubbleView(store: store, dock: dock) { [weak self] inside in self?.bubbleHoverChanged(inside) }
             .gesture(DragGesture(minimumDistance: 3)
                 .onChanged { [weak self] _ in self?.dragChanged() }
                 .onEnded { [weak self] _ in self?.dragEnded() })
@@ -151,9 +160,55 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         bubble.setFrameOrigin(origin)
         snapBubble(animated: false)
         bubble.orderFrontRegardless()
+        updateBubblePresence(animated: false)
+    }
+
+    // MARK: Collapsing to the edge
+
+    /// Is Claude blocked on you anywhere?
+    private var needsAttention: Bool {
+        store.sessions.contains { $0.pending != nil || $0.state == .needsYou }
+    }
+
+    /// Out when set to always, while the panel is open, when Claude needs you, or on
+    /// hover; otherwise tucked into the edge where it sits, after a short grace period.
+    private func updateBubblePresence(animated: Bool = true) {
+        let wantsOut = !bubbleOnlyWhenNeeded || chat.isVisible || needsAttention || bubbleHovering
+        if wantsOut {
+            collapseWork?.cancel()
+            collapseWork = nil
+            if dock.collapsed { setCollapsed(false, animated: animated) }
+        } else if !dock.collapsed, collapseWork == nil {
+            let work = DispatchWorkItem { [weak self] in
+                self?.collapseWork = nil
+                self?.setCollapsed(true, animated: true)
+            }
+            collapseWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + (animated ? 0.9 : 0), execute: work)
+        }
+    }
+
+    private func setCollapsed(_ collapsed: Bool, animated: Bool) {
+        let saved = UserDefaults.standard.string(forKey: "bubbleOrigin").map(NSPointFromString) ?? bubble.frame.origin
+        let expanded = NSRect(origin: saved, size: BubbleDock.bubbleSize)
+        let screen = NSScreen.screens.first { $0.frame.contains(NSPoint(x: expanded.midX, y: expanded.midY)) } ?? NSScreen.main
+        guard let visible = screen?.visibleFrame else { return }
+        dock.onLeftEdge = expanded.midX < visible.midX
+        let tab = BubbleDock.tabSize
+        let collapsedFrame = NSRect(x: dock.onLeftEdge ? visible.minX : visible.maxX - tab.width,
+                                    y: expanded.midY - tab.height / 2, width: tab.width, height: tab.height)
+        if collapsed { hidePeek() }
+        dock.collapsed = collapsed
+        bubble.setFrame(collapsed ? collapsedFrame : expanded, display: true, animate: animated)
+    }
+
+    private func bubbleHoverChanged(_ inside: Bool) {
+        bubbleHovering = inside
+        updateBubblePresence()
     }
 
     private func dragChanged() {
+        guard !dock.collapsed else { return }
         let mouse = NSEvent.mouseLocation
         if dragStart == nil { dragStart = (mouse, bubble.frame.origin) }
         guard let start = dragStart else { return }
@@ -233,6 +288,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         store.chatVisible = true
         store.markSeen()
+        updateBubblePresence(animated: false)  // the panel opens beside the bubble, so bring it out
         positionNextToBubble(chat)
         chat.makeKeyAndOrderFront(nil)
         // A click in any other app closes the panel. Clicks on Glaude's own windows
@@ -251,6 +307,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             NSEvent.removeMonitor(monitor)
             outsideClickMonitor = nil
         }
+        updateBubblePresence()
     }
 
     /// Place a panel beside the bubble, on the side facing the middle of the screen.
@@ -284,6 +341,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if session.turnCommands > 0 { footer.append("\(session.turnCommands) command\(session.turnCommands == 1 ? "" : "s")") }
         if session.turnAdded + session.turnRemoved > 0 { footer.append("+\(session.turnAdded) −\(session.turnRemoved)") }
         if !chat.isVisible { notifier.sessionFinished(session, text: plain(text), footer: footer.joined(separator: " · ")) }
+        if dock.collapsed {
+            // Tucked away: just a green glow on the tab, no bubble or peek.
+            dock.glow = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in self?.dock.glow = false }
+            return
+        }
         guard !(chat.isVisible && store.selected?.id == session.id) else { return }
         needsYouPeekSession = nil
         showPeek(title: "\(session.name) finished", detail: plain(text), footer: footer.joined(separator: " · "),
@@ -292,6 +355,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private func sessionNeedsYou(_ session: Session, message: String) {
         if soundsOn { NSSound(named: "Funk")?.play() }
+        if dock.collapsed { setCollapsed(false, animated: true) }  // out first, so the peek sits beside it
         if !chat.isVisible {
             notifier.sessionNeedsYou(session, title: message)
             notifiedNeedsYou.insert(session.id)
@@ -383,6 +447,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             menu.addItem(item)
         }
         add(bubble.isVisible ? "Hide Bubble" : "Show Bubble", #selector(toggleBubble))
+        add("Bubble: Always Visible", #selector(bubbleAlways), state: !bubbleOnlyWhenNeeded)
+        add("Bubble: Only When Claude Needs You", #selector(bubbleWhenNeeded), state: bubbleOnlyWhenNeeded)
         add("Open Chat", #selector(openChat), shortcut: .togglePanel)
         add("Jump to Session", #selector(jumpToSessionFromMenu), shortcut: .jumpToSession)
         menu.addItem(.separator())
@@ -419,6 +485,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     @objc private func toggleSounds() { soundsOn.toggle() }
+    @objc private func bubbleAlways() { bubbleOnlyWhenNeeded = false; updateBubblePresence() }
+    @objc private func bubbleWhenNeeded() { bubbleOnlyWhenNeeded = true; updateBubblePresence() }
     @objc private func toggleNotifications() { notifier.isEnabled.toggle() }
     @objc private func jumpToSessionFromMenu() { jumpToSession() }
 
