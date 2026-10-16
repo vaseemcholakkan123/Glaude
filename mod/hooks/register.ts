@@ -200,7 +200,8 @@ function toolInput(e: Payload): Payload {
 
 export const register: Register = (on, options) => {
   const answerPermissions = options.answerPermissions === true
-  notifyMode = typeof options.notifications === 'string' ? options.notifications : 'glaude'
+  const mode = typeof options.notifications === 'string' ? options.notifications.trim().toLowerCase() : ''
+  notifyMode = mode === 'claude' || mode === 'off' ? mode : 'glaude'
 
   on('session.start', async ($, e, next) => {
     if (!e.isInteractive) return next(e) // nobody to show a bubble to (claude -p, SDK)

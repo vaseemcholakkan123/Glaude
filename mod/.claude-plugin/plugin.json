@@ -25,12 +25,7 @@
     "notifications": {
       "type": "string",
       "title": "Notifications",
-      "description": "Who sends notifications. glaude: Glaude's own, with Reply, Answer and Allow/Deny buttons (needs Glaude in an Applications folder and its notification permission). claude: Claude Code's notification channel from /config, no buttons, finished turns only. off: none.",
-      "options": [
-        "glaude",
-        "claude",
-        "off"
-      ],
+      "description": "glaude, claude or off. glaude: Glaude's own notifications with Reply, Answer and Allow/Deny buttons (needs Glaude in an Applications folder and its notification permission). claude: Claude Code's notification channel from /config, finished turns only, no buttons. off: none.",
       "default": "glaude"
     }
   }
