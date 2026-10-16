@@ -74,6 +74,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var needsYouPeekSession: String?
     private var dragStart: (mouse: NSPoint, origin: NSPoint)?
     private var outsideClickMonitor: Any?
+    private let hotkeys = Hotkeys()
+    private var notifier: Notifier!
+    /// Sessions with a "needs you" notification up, to take down once they're answered.
+    private var notifiedNeedsYou: Set<String> = []
     private var cancellables = Set<AnyCancellable>()
 
     private var soundsOn: Bool {
@@ -95,8 +99,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         store.onNeedsYou = { [weak self] session, message in self?.sessionNeedsYou(session, message: message) }
         store.$selectedID.sink { [weak self] _ in DispatchQueue.main.async { self?.store.markSeen() } }
             .store(in: &cancellables)
-        store.$sessions.sink { [weak self] _ in DispatchQueue.main.async { self?.dropResolvedNeedsYouPeek() } }
-            .store(in: &cancellables)
+        store.$sessions.sink { [weak self] _ in
+            DispatchQueue.main.async {
+                self?.dropResolvedNeedsYouPeek()
+                self?.dropResolvedNotifications()
+            }
+        }
+        .store(in: &cancellables)
+
+        notifier = Notifier(store: store)
+        notifier.onOpen = { [weak self] id in self?.showChat(sessionID: id) }
+        notifier.onOpenTerminal = { [weak self] id in
+            if let session = self?.store.session(id) { TerminalFocus.reveal(session) }
+        }
+        notifier.start()
+
+        hotkeys.onPress = { [weak self] action in
+            switch action {
+            case .togglePanel: self?.toggleChat()
+            case .jumpToSession: self?.jumpToSession()
+            }
+        }
+        hotkeys.register()
+    }
+
+    /// ⌃⌥J: the session that needs you (else the latest one), in its terminal and the panel.
+    private func jumpToSession() {
+        let target = store.sessions.first { $0.pending != nil || $0.state == .needsYou }
+            ?? store.sessions.max { $0.lastActivity < $1.lastActivity }
+        guard let target else { return NSSound.beep() }
+        TerminalFocus.reveal(target)
+        showChat(sessionID: target.id)
     }
 
     // MARK: Bubble
@@ -160,7 +193,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             store: store,
             panelSize: panelSize,
             onClose: { [weak self] in self?.hideChat() },
-            onOpenTerminal: { [weak self] session in self?.revealTerminal(for: session) },
+            onOpenTerminal: { session in TerminalFocus.reveal(session) },
             onToggleSize: { [weak self] in self?.toggleChatSize() }
         )
         let host = ClickThroughHostingView(rootView: view)
@@ -242,7 +275,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private func sessionFinished(_ session: Session) {
         if soundsOn { NSSound(named: "Glass")?.play() }
-        guard !(chat.isVisible && store.selected?.id == session.id) else { return }
         let text = session.items.reversed().compactMap { item -> String? in
             if case .assistant(let text) = item.kind { return text }
             return nil
@@ -250,6 +282,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         var footer: [String] = []
         if !session.turnFiles.isEmpty { footer.append("\(session.turnFiles.count) file\(session.turnFiles.count == 1 ? "" : "s") changed") }
         if session.turnCommands > 0 { footer.append("\(session.turnCommands) command\(session.turnCommands == 1 ? "" : "s")") }
+        if session.turnAdded + session.turnRemoved > 0 { footer.append("+\(session.turnAdded) −\(session.turnRemoved)") }
+        if !chat.isVisible { notifier.sessionFinished(session, text: plain(text), footer: footer.joined(separator: " · ")) }
+        guard !(chat.isVisible && store.selected?.id == session.id) else { return }
         needsYouPeekSession = nil
         showPeek(title: "\(session.name) finished", detail: plain(text), footer: footer.joined(separator: " · "),
                  tint: .glaudeDone, sessionID: session.id)
@@ -257,6 +292,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private func sessionNeedsYou(_ session: Session, message: String) {
         if soundsOn { NSSound(named: "Funk")?.play() }
+        if !chat.isVisible {
+            notifier.sessionNeedsYou(session, title: message)
+            notifiedNeedsYou.insert(session.id)
+        }
         guard !(chat.isVisible && store.selected?.id == session.id) else { return }
         needsYouPeekSession = session.id
         showPeek(title: "\(session.name) needs you", detail: message, footer: "Click to answer",
@@ -288,6 +327,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if session == nil || (session?.pending == nil && session?.state != .needsYou) { hidePeek() }
     }
 
+    /// Take a "needs you" notification down once its session stops waiting.
+    private func dropResolvedNotifications() {
+        for id in notifiedNeedsYou {
+            let session = store.session(id)
+            if session == nil || (session?.pending == nil && session?.state != .needsYou) {
+                notifier.clearNeedsYou(id)
+                notifiedNeedsYou.remove(id)
+            }
+        }
+    }
+
     private func hidePeek() {
         needsYouPeekSession = nil
         peekHide?.cancel()
@@ -307,28 +357,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     // MARK: Terminal
 
-    /// Walk up from the session's claude process to the GUI app hosting it (Ghostty, iTerm, …).
-    private func revealTerminal(for session: Session) {
-        var pid = pid_t(session.pid)
-        for _ in 0..<12 where pid > 1 {
-            if let app = NSRunningApplication(processIdentifier: pid), app.activationPolicy == .regular {
-                app.activate()
-                return
-            }
-            guard let parent = parentPID(pid) else { break }
-            pid = parent
-        }
-        NSSound.beep()
-    }
-
-    private func parentPID(_ pid: pid_t) -> pid_t? {
-        var info = kinfo_proc()
-        var size = MemoryLayout<kinfo_proc>.stride
-        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
-        guard sysctl(&mib, 4, &info, &size, nil, 0) == 0, size > 0 else { return nil }
-        return info.kp_eproc.e_ppid
-    }
-
     // MARK: Menu bar
 
     private func setUpStatusItem() {
@@ -341,18 +369,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private func rebuildMenu(_ menu: NSMenu) {
         menu.removeAllItems()
-        func add(_ title: String, _ action: Selector, state: Bool? = nil) {
-            let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
-            item.target = self
+        func add(_ title: String, _ action: Selector?, state: Bool? = nil, shortcut: Hotkeys.Action? = nil) {
+            var label = title
+            if let shortcut, hotkeys.unavailable.contains(shortcut) { label += " (\(shortcut.display) unavailable)" }
+            let item = NSMenuItem(title: label, action: action, keyEquivalent: "")
+            if let shortcut, !hotkeys.unavailable.contains(shortcut) {
+                item.keyEquivalent = shortcut.keyEquivalent  // shown in the menu; the hot key does the work
+                item.keyEquivalentModifierMask = [.control, .option]
+            }
+            item.target = action == nil ? nil : self
+            item.isEnabled = action != nil
             if let state { item.state = state ? .on : .off }
             menu.addItem(item)
         }
         add(bubble.isVisible ? "Hide Bubble" : "Show Bubble", #selector(toggleBubble))
-        add("Open Chat", #selector(openChat))
+        add("Open Chat", #selector(openChat), shortcut: .togglePanel)
+        add("Jump to Session", #selector(jumpToSessionFromMenu), shortcut: .jumpToSession)
         menu.addItem(.separator())
         add("Copy Plugin Install Command", #selector(copyInstallCommand))
         menu.addItem(.separator())
         add("Sounds", #selector(toggleSounds), state: soundsOn)
+        if store.notifyMode == "claude" {
+            add("Notifications: sent by Claude Code", nil)
+        } else if !notifier.isInstalled {
+            add("Notifications need Glaude in Applications", nil)
+        } else {
+            add("Notifications", #selector(toggleNotifications), state: notifier.isEnabled && notifier.isAuthorized)
+        }
         add("Launch at Login", #selector(toggleLogin), state: SMAppService.mainApp.status == .enabled)
         menu.addItem(.separator())
         add("Quit Glaude", #selector(quit))
@@ -376,6 +419,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     @objc private func toggleSounds() { soundsOn.toggle() }
+    @objc private func toggleNotifications() { notifier.isEnabled.toggle() }
+    @objc private func jumpToSessionFromMenu() { jumpToSession() }
 
     @objc private func toggleLogin() {
         do {

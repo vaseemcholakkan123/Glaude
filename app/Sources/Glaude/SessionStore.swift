@@ -4,13 +4,39 @@ enum SessionState {
     case idle, working, needsYou, done
 }
 
+/// An edit's change, from the tool's structuredPatch: counts plus the hunks to draw.
+struct FileDiff {
+    struct Hunk { let oldStart: Int; let newStart: Int; let lines: [String] }
+    let added: Int
+    let removed: Int
+    let hunks: [Hunk]
+    let truncated: Bool
+}
+
+/// One plan rate-limit window (`five_hour`, `seven_day`, …), account-wide.
+struct PlanLimit: Identifiable {
+    let kind: String
+    let percentUsed: Double
+    let resetsAt: Date?
+    var id: String { kind }
+
+    var shortName: String {
+        switch kind {
+        case "five_hour": return "5h"
+        case "seven_day": return "wk"
+        case "seven_day_opus": return "wk Opus"
+        default: return kind.replacingOccurrences(of: "_", with: " ")
+        }
+    }
+}
+
 struct ChatItem: Identifiable {
     enum Kind {
         case user(String)
         case assistant(String)
-        case tool(symbol: String, text: String)
+        case tool(symbol: String, text: String, diff: FileDiff?)
         case note(String)
-        case summary(files: [String], commands: Int)
+        case summary(files: [String], commands: Int, added: Int, removed: Int)
     }
     let id = UUID()
     let kind: Kind
@@ -56,7 +82,17 @@ struct Session: Identifiable {
     var pending: PendingRequest?
     var turnFiles: [String] = []
     var turnCommands = 0
+    var turnAdded = 0
+    var turnRemoved = 0
     var unseenDone = false
+    /// The claude process's terminal (`/dev/ttys003`) and where it was started: how the
+    /// session's own terminal tab is found.
+    var tty = ""
+    var launchDir = ""
+    /// How full the context window is, 0–100, after the last turn.
+    var contextPercent: Double?
+    /// When something last happened, for "jump to the latest session".
+    var lastActivity = Date()
     /// Replies sent from Glaude that haven't come back through UserPromptSubmit yet.
     var echoes: [String] = []
 
@@ -85,6 +121,10 @@ final class SessionStore: ObservableObject {
     @Published var chatVisible = false
     /// Sessions whose mod is polling for replies right now.
     @Published private(set) var replyable: Set<String> = []
+    /// The plan's rate-limit windows, from the latest session that reported them.
+    @Published private(set) var planLimits: [PlanLimit] = []
+    /// Who notifies, from the mod's `notifications` option (`glaude`, `claude`, `off`).
+    private(set) var notifyMode = "glaude"
 
     /// A session just finished a turn, or started waiting on you.
     var onDone: ((Session) -> Void)?
@@ -137,6 +177,7 @@ final class SessionStore: ObservableObject {
             return
         }
         ensureSession(sessionID, pid: json["pid"] as? Int ?? 0, cwd: json["cwd"] as? String ?? "")
+        absorbContext(json, sessionID: sessionID)
 
         switch event {
         case "UserPromptSubmit":
@@ -153,6 +194,8 @@ final class SessionStore: ObservableObject {
                 s.state = .working
                 s.turnFiles = []
                 s.turnCommands = 0
+                s.turnAdded = 0
+                s.turnRemoved = 0
                 s.unseenDone = false
             }
 
@@ -180,7 +223,8 @@ final class SessionStore: ObservableObject {
             let beingViewed = chatVisible && selected?.id == sessionID
             update(sessionID) { s in
                 if let text, !text.isEmpty { s.items.append(.init(kind: .assistant(text))) }
-                s.items.append(.init(kind: .summary(files: s.turnFiles, commands: s.turnCommands)))
+                s.items.append(.init(kind: .summary(files: s.turnFiles, commands: s.turnCommands,
+                                                    added: s.turnAdded, removed: s.turnRemoved)))
                 Self.clearTerminalCard(&s)
                 s.state = .done
                 s.unseenDone = !beingViewed
@@ -189,6 +233,27 @@ final class SessionStore: ObservableObject {
 
         default:
             break  // SessionStart: ensureSession above is all it needs
+        }
+    }
+
+    /// The fields any event may carry: identity, notify mode, usage.
+    private func absorbContext(_ json: [String: Any], sessionID: String) {
+        if let mode = json["notify"] as? String, mode != notifyMode { notifyMode = mode }
+        let tty = json["tty"] as? String ?? ""
+        let launchDir = json["launch_dir"] as? String ?? ""
+        let usage = json["usage"] as? [String: Any]
+        update(sessionID) { s in
+            if !tty.isEmpty, s.tty != tty { s.tty = tty }
+            if !launchDir.isEmpty, s.launchDir != launchDir { s.launchDir = launchDir }
+            if let percent = usage?["contextPercent"] as? Double { s.contextPercent = percent }
+            s.lastActivity = Date()
+        }
+        if let limits = usage?["limits"] as? [[String: Any]], !limits.isEmpty {
+            let iso = ISO8601DateFormatter()
+            planLimits = limits.compactMap { l in
+                guard let kind = l["kind"] as? String, let percent = l["percentUsed"] as? Double else { return nil }
+                return PlanLimit(kind: kind, percentUsed: percent, resetsAt: (l["resetsAt"] as? String).flatMap(iso.date(from:)))
+            }
         }
     }
 
@@ -354,6 +419,8 @@ final class SessionStore: ObservableObject {
             s.state = .working
             s.turnFiles = []
             s.turnCommands = 0
+            s.turnAdded = 0
+            s.turnRemoved = 0
         }
         if let waiter = replyWaiters.removeValue(forKey: sessionID) {
             waiter.respond(text)
@@ -379,19 +446,22 @@ final class SessionStore: ObservableObject {
                         }
                     } ?? NSNull(),
                     "canReply": canReply(s), "unseenDone": s.unseenDone,
+                    "tty": s.tty, "launchDir": s.launchDir, "contextPercent": s.contextPercent ?? NSNull(),
                     "turnFiles": s.turnFiles, "turnCommands": s.turnCommands,
                     "items": s.items.map { item -> String in
                         switch item.kind {
                         case .user(let t): return "user: \(t.prefix(60))"
                         case .assistant(let t): return "assistant: \(t.prefix(60))"
-                        case .tool(let sym, let t): return "tool[\(sym)]: \(t)"
+                        case .tool(let sym, let t, let d): return "tool[\(sym)]: \(t)" + (d.map { " +\($0.added) −\($0.removed)" } ?? "")
                         case .note(let t): return "note: \(t)"
-                        case .summary(let f, let c): return "summary: \(f.count) files, \(c) cmds"
+                        case .summary(let f, let c, let a, let r): return "summary: \(f.count) files, \(c) cmds, +\(a) −\(r)"
                         }
                     },
                 ]
             },
             "waitingRequests": requests.count,
+            "notifyMode": notifyMode,
+            "planLimits": planLimits.map { "\($0.kind) \($0.percentUsed)%" },
         ]
     }
 
@@ -423,24 +493,37 @@ final class SessionStore: ObservableObject {
         case "Edit", "Write", "MultiEdit", "NotebookEdit":
             let rel = s.relative(path ?? "")
             if !s.turnFiles.contains(rel) { s.turnFiles.append(rel) }
-            return .init(kind: .tool(symbol: "pencil", text: rel))
+            let diff = Self.fileDiff(json)
+            s.turnAdded += diff?.added ?? 0
+            s.turnRemoved += diff?.removed ?? 0
+            return .init(kind: .tool(symbol: "pencil", text: rel, diff: diff))
         case "Bash":
             s.turnCommands += 1
             let command = (input["command"] as? String ?? "").components(separatedBy: "\n").first ?? ""
-            return .init(kind: .tool(symbol: "terminal", text: command))
+            return .init(kind: .tool(symbol: "terminal", text: command, diff: nil))
         case "Read":
-            return .init(kind: .tool(symbol: "doc.text", text: s.relative(path ?? "")))
+            return .init(kind: .tool(symbol: "doc.text", text: s.relative(path ?? ""), diff: nil))
         case "Grep", "Glob":
-            return .init(kind: .tool(symbol: "magnifyingglass", text: input["pattern"] as? String ?? tool))
+            return .init(kind: .tool(symbol: "magnifyingglass", text: input["pattern"] as? String ?? tool, diff: nil))
         case "WebFetch", "WebSearch":
-            return .init(kind: .tool(symbol: "globe", text: (input["url"] ?? input["query"]) as? String ?? tool))
+            return .init(kind: .tool(symbol: "globe", text: (input["url"] ?? input["query"]) as? String ?? tool, diff: nil))
         case "Task", "Agent":
-            return .init(kind: .tool(symbol: "person.2", text: input["description"] as? String ?? "Agent"))
+            return .init(kind: .tool(symbol: "person.2", text: input["description"] as? String ?? "Agent", diff: nil))
         default:
             let parts = tool.components(separatedBy: "__")
             let label = parts.count >= 3 && parts[0] == "mcp" ? "\(parts[1]) · \(parts[2...].joined(separator: "__"))" : tool
-            return .init(kind: .tool(symbol: "wrench.and.screwdriver", text: label))
+            return .init(kind: .tool(symbol: "wrench.and.screwdriver", text: label, diff: nil))
         }
+    }
+
+    /// The mod's `patch`, `added` and `removed` for an edit; nil when it sent none.
+    private static func fileDiff(_ json: [String: Any]) -> FileDiff? {
+        guard let added = json["added"] as? Int, let removed = json["removed"] as? Int else { return nil }
+        let hunks = (json["patch"] as? [[String: Any]] ?? []).map { h in
+            FileDiff.Hunk(oldStart: h["oldStart"] as? Int ?? 0, newStart: h["newStart"] as? Int ?? 0,
+                          lines: h["lines"] as? [String] ?? [])
+        }
+        return FileDiff(added: added, removed: removed, hunks: hunks, truncated: json["patch_truncated"] as? Bool ?? false)
     }
 
     private func permissionDetail(tool: String, input: [String: Any]) -> String {

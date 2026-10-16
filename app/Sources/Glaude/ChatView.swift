@@ -38,6 +38,9 @@ struct ChatView: View {
                     }
                 }
             }
+            if !store.planLimits.isEmpty {
+                UsagePill(limits: store.planLimits)
+            }
             if let session = store.selected {
                 iconButton("terminal", help: "Show this session's terminal") { onOpenTerminal(session) }
             }
@@ -84,6 +87,12 @@ private struct SessionChip: View {
             HStack(spacing: 5) {
                 Circle().fill(dotColor).frame(width: 6, height: 6)
                 Text(session.name).font(.system(size: 11.5, weight: selected ? .semibold : .regular)).lineLimit(1)
+                if let percent = session.contextPercent {
+                    Text("\(Int(percent.rounded()))%")
+                        .font(.system(size: 9.5, weight: .medium).monospacedDigit())
+                        .foregroundStyle(percent >= 80 ? Color.glaudeAccent : .secondary)
+                        .help("Context window \(Int(percent.rounded()))% full")
+                }
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
@@ -192,8 +201,8 @@ private struct MessageRow: View {
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity)
-        case .summary(let files, let commands):
-            SummaryCard(files: files, commands: commands)
+        case .summary(let files, let commands, let added, let removed):
+            SummaryCard(files: files, commands: commands, added: added, removed: removed)
         case .tool:
             EmptyView()
         }
@@ -225,12 +234,8 @@ private struct ToolRun: View {
                     .foregroundStyle(.secondary)
             }
             ForEach(visible) { item in
-                if case .tool(let symbol, let text) = item.kind {
-                    HStack(spacing: 6) {
-                        Image(systemName: symbol).font(.system(size: 9.5)).frame(width: 12)
-                        Text(text).font(.system(size: 11, design: .monospaced)).lineLimit(1).truncationMode(.middle)
-                    }
-                    .foregroundStyle(.secondary)
+                if case .tool(let symbol, let text, let diff) = item.kind {
+                    ToolStep(symbol: symbol, text: text, diff: diff)
                 }
             }
         }
@@ -238,15 +243,133 @@ private struct ToolRun: View {
     }
 }
 
-private struct SummaryCard: View {
-    let files: [String]
-    let commands: Int
+/// One tool call; an edit shows +N −M and opens to its diff.
+private struct ToolStep: View {
+    let symbol: String
+    let text: String
+    let diff: FileDiff?
+    // See the note on ToolRun: no @State macro.
+    private let openState = State<Bool>(initialValue: false)
+    private var open: Bool {
+        get { openState.wrappedValue }
+        nonmutating set { openState.wrappedValue = newValue }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Label(headline, systemImage: "checkmark.circle.fill")
-                .font(.system(size: 11.5, weight: .semibold))
-                .foregroundStyle(Color.glaudeDone)
+            HStack(spacing: 6) {
+                Image(systemName: symbol).font(.system(size: 9.5)).frame(width: 12)
+                Text(text).font(.system(size: 11, design: .monospaced)).lineLimit(1).truncationMode(.middle)
+                if let diff, diff.added + diff.removed > 0 {
+                    Spacer(minLength: 4)
+                    DiffCounts(added: diff.added, removed: diff.removed)
+                    Image(systemName: open ? "chevron.down" : "chevron.right").font(.system(size: 8, weight: .semibold))
+                }
+            }
+            .contentShape(Rectangle())
+            .onTapGesture { if let diff, !diff.hunks.isEmpty { open.toggle() } }
+            .help(diff == nil ? "" : "Show the change")
+            if open, let diff { DiffView(diff: diff) }
+        }
+        .foregroundStyle(.secondary)
+    }
+}
+
+struct DiffCounts: View {
+    let added: Int
+    let removed: Int
+
+    var body: some View {
+        HStack(spacing: 4) {
+            if added > 0 { Text("+\(added)").foregroundStyle(Color.diffAdded) }
+            if removed > 0 { Text("−\(removed)").foregroundStyle(Color.diffRemoved) }
+        }
+        .font(.system(size: 10.5, weight: .medium, design: .monospaced))
+    }
+}
+
+/// An edit's hunks: added lines green, removed red, context dim.
+private struct DiffView: View {
+    let diff: FileDiff
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(Array(diff.hunks.enumerated()), id: \.offset) { index, hunk in
+                    if index > 0 {
+                        Text("⋯").font(.system(size: 10, design: .monospaced)).foregroundStyle(.tertiary).padding(.vertical, 2)
+                    }
+                    ForEach(Array(hunk.lines.enumerated()), id: \.offset) { _, line in
+                        DiffLine(line: line)
+                    }
+                }
+                if diff.truncated {
+                    Text("Diff cut short").font(.system(size: 10)).foregroundStyle(.tertiary).padding(.top, 3)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(maxHeight: 240)
+        .padding(6)
+        .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Color.primary.opacity(0.05)))
+        .textSelection(.enabled)
+    }
+}
+
+private struct DiffLine: View {
+    let line: String
+
+    var body: some View {
+        let kind = line.first
+        Text(line.isEmpty ? " " : line)
+            .font(.system(size: 10.5, design: .monospaced))
+            .lineLimit(3)
+            .foregroundStyle(kind == "+" ? Color.diffAdded : kind == "-" ? Color.diffRemoved : Color.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 3)
+            .background(kind == "+" ? Color.diffAdded.opacity(0.1) : kind == "-" ? Color.diffRemoved.opacity(0.1) : Color.clear)
+    }
+}
+
+/// The plan's limits in the header: "5h 42% · wk 18%", tinted as they fill.
+private struct UsagePill: View {
+    let limits: [PlanLimit]
+
+    var body: some View {
+        let top = limits.map(\.percentUsed).max() ?? 0
+        Text(limits.prefix(2).map { "\($0.shortName) \(Int($0.percentUsed.rounded()))%" }.joined(separator: " · "))
+            .font(.system(size: 10, weight: .medium).monospacedDigit())
+            .foregroundStyle(top >= 95 ? Color.diffRemoved : top >= 80 ? Color.glaudeAccent : .secondary)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background(Capsule().fill(Color.primary.opacity(0.06)))
+            .help(limits.map(describe).joined(separator: "\n"))
+    }
+
+    private func describe(_ limit: PlanLimit) -> String {
+        var text = "\(limit.shortName): \(Int(limit.percentUsed.rounded()))% used"
+        if let reset = limit.resetsAt {
+            text += ", resets \(reset.formatted(date: .omitted, time: .shortened))"
+            if !Calendar.current.isDateInToday(reset) { text += " \(reset.formatted(.dateTime.weekday(.abbreviated)))" }
+        }
+        return text
+    }
+}
+
+private struct SummaryCard: View {
+    let files: [String]
+    let commands: Int
+    let added: Int
+    let removed: Int
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Label(headline, systemImage: "checkmark.circle.fill")
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .foregroundStyle(Color.glaudeDone)
+                if added + removed > 0 { DiffCounts(added: added, removed: removed) }
+            }
             ForEach(files.prefix(6), id: \.self) { file in
                 Text(file).font(.system(size: 10.5, design: .monospaced)).foregroundStyle(.secondary).lineLimit(1)
             }

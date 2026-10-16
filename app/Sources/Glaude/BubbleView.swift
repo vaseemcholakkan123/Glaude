@@ -3,6 +3,8 @@ import SwiftUI
 extension Color {
     static let glaudeAccent = Color(red: 0.85, green: 0.47, blue: 0.34)  // warm clay
     static let glaudeDone = Color(red: 0.30, green: 0.72, blue: 0.45)
+    static let diffAdded = Color(red: 0.25, green: 0.70, blue: 0.40)
+    static let diffRemoved = Color(red: 0.90, green: 0.33, blue: 0.30)
 }
 
 /// The floating 48pt button: idle (faded), working (spinning ring),

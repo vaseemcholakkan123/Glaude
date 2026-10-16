@@ -30,9 +30,20 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
     <key>CFBundleVersion</key><string>2</string>
     <key>LSMinimumSystemVersion</key><string>14.0</string>
     <key>LSUIElement</key><true/>
+    <key>NSAppleEventsUsageDescription</key><string>Glaude brings the right terminal tab to the front.</string>
 </dict>
 </plist>
 PLIST
 
 codesign --force --sign - "$APP"
 echo "Built $APP"
+
+# --install: copy to ~/Applications, where macOS lets the app send notifications.
+if [ "${1:-}" = "--install" ]; then
+  dest="$HOME/Applications/Glaude.app"
+  mkdir -p "$HOME/Applications"
+  rm -rf "$dest"
+  cp -R "$APP" "$dest"
+  /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$dest"
+  echo "Installed $dest"
+fi
