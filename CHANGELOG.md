@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.2.0]
+
+- **Edit diffs:** Edit and Write steps show `+N −M`; click one to see the diff. Done cards and summaries show the turn's totals.
+- **Plan usage and context:** the panel header shows your 5-hour and weekly limits, and each session shows how full its context window is.
+- **Keyboard shortcuts:** ⌃⌥G opens or closes the panel; ⌃⌥J jumps to the session that needs you.
+- **Notifications you can act on:** while the panel is closed, finished turns and requests arrive as macOS notifications with **Reply**, answer buttons and (with `answerPermissions`) **Allow/Deny**. They go away once answered. A new plugin option, `notifications`, picks `glaude` (default), `claude` (Claude Code's own channel from `/config`) or `off`.
+- **The exact terminal tab:** Open terminal and ⌃⌥J bring the session's own tab forward in Ghostty, iTerm2 and Terminal.
+- **Only when Claude needs you:** an optional mode that tucks the bubble into a slim tab in the screen edge until a session is blocked on you; it glows green when one finishes.
+- The settings menu also opens from a right-click on the bubble and the panel's ⋯ button.
+
 ## [0.1.1]
 
 - Builds with Swift toolchains whose SDK makes SwiftUI's `@State` a macro: the app no longer uses the `@State` and `@FocusState` macros, which need a compiler plugin the Command Line Tools don't ship.

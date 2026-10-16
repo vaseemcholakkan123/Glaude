@@ -11,6 +11,10 @@ Glaude is a small bubble that floats at the edge of your screen while you work i
 - **You can reply from it.** Click the bubble to open a small chat panel for each session. Type a follow-up there and it runs as a normal prompt in that session.
 - **It answers Claude's questions.** When Claude asks you a multiple-choice question, you can answer it in the panel.
 - **It flags what only the terminal can answer.** A plan waiting for approval shows as a pinned card with an **Open terminal** button. So does a permission prompt that's still waiting after a few seconds; the wait means calls the auto-mode classifier approves on its own don't set off a card.
+- **It shows what changed.** Edit and Write steps show `+N −M`; click one for the diff.
+- **It shows your plan usage.** The 5-hour and weekly limits sit in the panel header, and each session shows how full its context window is.
+- **It stays out of the way, if you like.** Choose **Bubble: Only When Claude Needs You** and it tucks into a slim tab in the screen edge until a session is blocked on you.
+- **It takes you to the right tab.** Open terminal brings up the session's own tab in Ghostty, iTerm2 or Terminal.
 
 ## Requirements
 
@@ -53,11 +57,23 @@ claude plugin install glaude --marketplace vaseemcholakkan123/Glaude
 
 The plugin is active right away, and in every session you start afterwards. Glaude's menu has **Copy Plugin Install Command** if you need the line again.
 
+## Shortcuts and settings
+
+| Shortcut | Does |
+|---|---|
+| ⌃⌥G | Open or close the panel |
+| ⌃⌥J | Jump to the session that needs you (or the latest one): its terminal tab and the panel |
+
+Settings live in the menu under the ✦ icon in the menu bar. The same menu opens from a right-click on the bubble, or the ⋯ button in the panel. There you can pick **Bubble: Always Visible** or **Only When Claude Needs You**, and turn sounds, notifications and Launch at Login on or off.
+
+**Notifications** need Glaude in an Applications folder (macOS refuses them otherwise) and your permission the first time. If you build from source, `./app/build.sh --install` copies the app to `~/Applications`. **Open terminal** asks once per terminal app for permission to control it (System Settings → Privacy & Security → Automation).
+
 ## Options
 
 | Option | Default | What it does |
 |---|---|---|
 | `answerPermissions` | off | Adds **Allow** and **Deny** buttons to Glaude's permission cards. Claude waits up to 2 minutes for your answer there, then shows the terminal prompt. |
+| `notifications` | `glaude` | Who sends notifications: `glaude` (Glaude's own, with buttons), `claude` (Claude Code's channel from `/config`, finished turns only, no buttons) or `off`. |
 
 Leave `answerPermissions` off if you use auto mode. A plugin can't tell which permission mode a session is in, so with this option on, Glaude would also hold calls that the auto-mode classifier would otherwise decide by itself. Change the option with `/plugin configure glaude@glaude`.
 
@@ -86,8 +102,10 @@ Leave `answerPermissions` off if you use auto mode. A plugin can't tell which pe
 - **Calls:**
   - `$.http.fetch`, to `127.0.0.1` only
   - `$.fs.read`, for `~/.glaude/port` and `~/.glaude/token`
-  - `$.env.get('HOME')`
-  - `$.process.run(['/bin/sh', '-c', 'echo $PPID'])`, once per session, for the process id that **Open terminal** uses
+  - `$.env.get('HOME')` and `$.env.get('PWD')` (the folder Claude was started in, to find its Ghostty tab)
+  - `$.process.run(['/bin/sh', '-c', 'echo $PPID; ps -o tty= -p $PPID'])`, once per session, for the process id and terminal that **Open terminal** uses
+  - `$.session.usage`, for the plan limits and context fill
+  - `$.ui.notify`, only with `notifications: claude`
   - `$.prompt.submit`, for your replies
   - `$.session.id`
   - `$.clock.after`
@@ -101,6 +119,33 @@ Leave `answerPermissions` off if you use auto mode. A plugin can't tell which pe
   ```
 - **Nothing happens at work.** Your organization can turn off plugins you install yourself, for example with `allowManagedModsOnly`, `allowManagedHooksOnly`, `disableAllHooks` or a marketplace allowlist. Mods are on by default, so if they're off for you, an admin turned them off. See [Manage mods for your organization](https://code.claude.com/docs/en/plugins/mods/admin).
 - **The reply box doesn't appear.** It appears once the session's plugin is polling Glaude, a moment after the session starts. Sessions started before you installed the plugin need a restart, or `/reload-plugins`.
+
+## Updating
+
+Update both parts when a new version comes out; [Releases](https://github.com/vaseemcholakkan123/Glaude/releases) and [CHANGELOG.md](CHANGELOG.md) list what changed.
+
+**The plugin.** From your shell:
+
+```bash
+claude plugin update glaude@glaude
+```
+
+Or in a session: `/plugin` → **Installed** → **glaude** → **Update now**. Then run `/reload-plugins` in sessions that are already open (new sessions pick it up by themselves).
+
+To get plugin updates automatically: `/plugin` → **Marketplaces** → **glaude** → **Enable auto-update**. Third-party marketplaces have it off by default.
+
+**The app.** Quit Glaude first (✦ menu → **Quit Glaude**), then:
+
+- **From a release:** download the new zip, replace `Glaude.app` in Applications with the one inside, and run
+  ```bash
+  xattr -dr com.apple.quarantine /Applications/Glaude.app && open /Applications/Glaude.app
+  ```
+- **From source:**
+  ```bash
+  cd Glaude && git pull && ./app/build.sh --install && open ~/Applications/Glaude.app
+  ```
+
+Your settings (bubble position, sounds, notifications) carry over. macOS may ask again for permission to control your terminal, because each build has a new ad-hoc signature.
 
 ## Uninstall
 

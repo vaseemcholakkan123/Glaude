@@ -158,7 +158,9 @@ function patchFields(tool: string, input: Payload, result: unknown): Payload {
   let hunks: Hunk[] = output?.structuredPatch ?? []
   // A new file written whole has no patch: every line is an addition.
   if (!hunks.length && tool === 'Write' && typeof input.content === 'string') {
-    hunks = [{ oldStart: 0, newStart: 1, lines: input.content.split('\n').map(line => `+${line}`) }]
+    const lines = input.content.split('\n')
+    if (lines.at(-1) === '') lines.pop() // a trailing newline isn't a line of its own
+    hunks = [{ oldStart: 0, newStart: 1, lines: lines.map(line => `+${line}`) }]
   }
   let added = 0
   let removed = 0
