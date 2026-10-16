@@ -22,10 +22,19 @@ const ASK_NOTICE_MS = 6_000
 const MACHINE_PROMPTS = new Set(['task-notification', 'auto-continuation', 'observer', 'observer-activity', 'coordinator'])
 /** Tools whose terminal dialog asks the person whatever the permission mode. */
 const ASKS_ITSELF = new Set(['AskUserQuestion', 'ExitPlanMode'])
+/** File tools whose result carries a structuredPatch for Glaude's diff view. */
+const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit'])
+/** The most diff lines sent per edit; the rest is counted, not shown. */
+const PATCH_LINE_LIMIT = 400
 
 let conn: Conn | undefined
 let cwd = ''
+/** Where `claude` was started: what Ghostty reports as the tab's working directory. */
+let launchDir = ''
 let pid = 0
+let tty = ''
+/** The `notifications` option: who notifies, as the app needs to know. */
+let notifyMode = 'glaude'
 let stopped = false
 /** Asks not yet flagged, by tool_use_id: cancelled once the call goes ahead. */
 const openAsks = new Map<string, Timer>()
@@ -69,7 +78,10 @@ async function call($: EngineInterface, method: string, path: string, body?: Pay
 
 /** The fields every message to the app carries. */
 async function envelope($: EngineInterface, event: string, fields: Payload): Promise<Payload> {
-  return { session_id: await $.session.id(), cwd, pid, hook_event_name: event, ...fields }
+  return {
+    session_id: await $.session.id(), cwd, launch_dir: launchDir, pid, tty, notify: notifyMode,
+    hook_event_name: event, ...fields,
+  }
 }
 
 /** Fire-and-forget status update: never holds up Claude. */
@@ -109,14 +121,65 @@ async function pollReplies($: EngineInterface) {
   $.clock.after(delay, () => { void pollReplies($) })
 }
 
-/** The claude process id, so Glaude can bring the session's terminal to the front. */
-async function claudePid($: EngineInterface): Promise<number> {
+/** The claude process's id and terminal, so Glaude can bring the session's own tab forward. */
+async function claudeIdentity($: EngineInterface): Promise<{ pid: number; tty: string }> {
   try {
-    const { stdout } = await $.process.run(['/bin/sh', '-c', 'echo $PPID'], { timeoutMs: 2_000 })
-    return Number(stdout.trim()) || 0
+    const { stdout } = await $.process.run(['/bin/sh', '-c', 'echo $PPID; ps -o tty= -p $PPID'], { timeoutMs: 2_000 })
+    const [pidLine = '', ttyLine = ''] = stdout.split('\n').map(line => line.trim())
+    const name = ttyLine && ttyLine !== '??' ? ttyLine : ''
+    return { pid: Number(pidLine) || 0, tty: name ? `/dev/${name.replace(/^\/dev\//, '')}` : '' }
   } catch {
-    return 0
+    return { pid: 0, tty: '' }
   }
+}
+
+/** Plan limits (5-hour, weekly), context fill and cost, for the panel's header and chips. */
+async function usageFields($: EngineInterface): Promise<Payload> {
+  try {
+    const usage = await $.session.usage()
+    return {
+      usage: {
+        limits: usage.rateLimits.map(l => ({ kind: l.kind, percentUsed: l.percentUsed, resetsAt: l.resetsAt ?? null })),
+        contextPercent: usage.context.percent ?? null,
+        contextWindow: usage.context.window,
+        costUsd: usage.cost?.usd ?? null,
+      },
+    }
+  } catch {
+    return {}
+  }
+}
+
+/** An edit's diff hunks from the tool's result, capped at PATCH_LINE_LIMIT lines. */
+function patchFields(tool: string, input: Payload, result: unknown): Payload {
+  if (!EDIT_TOOLS.has(tool)) return {}
+  type Hunk = { oldStart: number; newStart: number; lines: string[] }
+  const output = (result as { result?: { structuredPatch?: Hunk[]; type?: string; content?: string } }).result
+  let hunks: Hunk[] = output?.structuredPatch ?? []
+  // A new file written whole has no patch: every line is an addition.
+  if (!hunks.length && tool === 'Write' && typeof input.content === 'string') {
+    hunks = [{ oldStart: 0, newStart: 1, lines: input.content.split('\n').map(line => `+${line}`) }]
+  }
+  let added = 0
+  let removed = 0
+  let budget = PATCH_LINE_LIMIT
+  const patch: Hunk[] = []
+  for (const hunk of hunks) {
+    for (const line of hunk.lines) {
+      if (line.startsWith('+')) added++
+      else if (line.startsWith('-')) removed++
+    }
+    if (budget > 0) {
+      patch.push({ oldStart: hunk.oldStart, newStart: hunk.newStart, lines: hunk.lines.slice(0, budget) })
+      budget -= hunk.lines.length
+    }
+  }
+  return { patch, added, removed, patch_truncated: budget < 0 }
+}
+
+/** The project's folder name, for notification titles. */
+function projectName(): string {
+  return (launchDir || cwd).split('/').filter(Boolean).pop() ?? 'Claude Code'
 }
 
 /** The call went ahead (it's running, or finished): it no longer waits on you. */
@@ -135,12 +198,14 @@ function toolInput(e: Payload): Payload {
 
 export const register: Register = (on, options) => {
   const answerPermissions = options.answerPermissions === true
+  notifyMode = typeof options.notifications === 'string' ? options.notifications : 'glaude'
 
   on('session.start', async ($, e, next) => {
     if (!e.isInteractive) return next(e) // nobody to show a bubble to (claude -p, SDK)
     cwd = e.cwd
-    pid = await claudePid($)
-    report($, 'SessionStart')
+    launchDir = (await $.env.get('PWD')) ?? e.cwd
+    ;({ pid, tty } = await claudeIdentity($))
+    void usageFields($).then(usage => report($, 'SessionStart', usage))
     $.clock.after(0, () => { void pollReplies($) })
     return next(e)
   })
@@ -177,7 +242,7 @@ export const register: Register = (on, options) => {
 
     const result = await next(e)
     if (e.tool_use_id) callProceeded($, e.tool_use_id, true)
-    report($, 'PostToolUse', { tool_name: e.tool, tool_input: input })
+    report($, 'PostToolUse', { tool_name: e.tool, tool_input: input, ...patchFields(e.tool, input, result) })
     return result
   }).catch(($, e, next) => next(e))
 
@@ -211,7 +276,16 @@ export const register: Register = (on, options) => {
 
   on('turn.complete', async ($, e, next) => {
     const result = await next(e)
-    if (cwd && !e.agentId) report($, 'Stop', { last_assistant_message: e.answer })
+    if (cwd && !e.agentId) {
+      const usage = await usageFields($)
+      report($, 'Stop', { last_assistant_message: e.answer, ...usage })
+      if (notifyMode === 'claude') {
+        // Through the person's own /config channel; Claude Code already notifies when it
+        // waits on them, so only "done" is added here.
+        const first = (e.answer ?? '').split('\n').find(line => line.trim()) ?? 'Done'
+        void $.ui.notify(first.slice(0, 160), { title: `${projectName()} finished` })
+      }
+    }
     return result
   })
 }

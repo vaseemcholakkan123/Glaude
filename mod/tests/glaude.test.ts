@@ -21,7 +21,13 @@ function fakeApp(on: On): FakeApp {
   const app: FakeApp = { events: [], waits: [], replies: [], running: true, submitted: [], clock }
   mock.env(on, { HOME: '/home/me' })
   on('fs.read', ($, e) => ({ value: e.path.endsWith('/.glaude/port') ? '47821\n' : 'secret-token\n' }))
-  on('process.run', () => ({ value: { exitCode: 0, stdout: '4242\n', stderr: '' } }) as never)
+  on('process.run', () => ({ value: { exitCode: 0, stdout: '4242\nttys003\n', stderr: '' } }) as never)
+  on('session.usage', () => ({ value: {
+    startedAt: 0,
+    context: { window: 200_000, percent: 61 },
+    rateLimits: [{ kind: 'five_hour', percentUsed: 42, resetsAt: '2026-10-16T18:00:00Z', source: 'api' }],
+    cost: { usd: 1.25 },
+  } }) as never)
   on('session.id', () => ({ value: 'session-1' }))
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('prompt.submit', ($, e) => {
@@ -65,7 +71,7 @@ test('a session reports itself, with the claude pid', async ($, on) => {
   await $.session.start(PROJECT)
   await app.clock.settle()
   expect(app.events[0]).toEqual(expect.objectContaining({
-    hook_event_name: 'SessionStart', session_id: 'session-1', cwd: '/work/project', pid: 4242,
+    hook_event_name: 'SessionStart', session_id: 'session-1', cwd: '/work/project', pid: 4242, tty: '/dev/ttys003',
   }))
 })
 
@@ -137,4 +143,31 @@ test('a background-task notification is not shown as your prompt', async ($, on)
   await app.clock.settle()
   const prompts = app.events.filter(e => e.hook_event_name === 'UserPromptSubmit').map(e => e.prompt)
   expect(prompts).toEqual(['typed by you'])
+})
+
+test('an edit sends its diff hunks and +/- counts', async ($, on) => {
+  const app = fakeApp(on)
+  on('tool.call', { tool: 'Edit' }, () => ({ result: {
+    filePath: '/work/project/a.ts', oldString: 'a', newString: 'b', originalFile: 'a', userModified: false, replaceAll: false,
+    structuredPatch: [{ oldStart: 3, oldLines: 2, newStart: 3, newLines: 3, lines: [' keep', '-old', '+new', '+added'] }],
+  } }) as never)
+  await $.session.start(PROJECT)
+  await $.tool.call({ tool: 'Edit', file_path: '/work/project/a.ts', old_string: 'old', new_string: 'new\nadded' } as never)
+  await app.clock.settle()
+  const edit = app.events.find(e => e.hook_event_name === 'PostToolUse' && e.tool_name === 'Edit')
+  expect(edit).toEqual(expect.objectContaining({ added: 2, removed: 1, patch_truncated: false }))
+  expect((edit?.patch as { lines: string[] }[])[0]?.lines).toEqual([' keep', '-old', '+new', '+added'])
+})
+
+test('a finished turn carries plan limits and context fill', async ($, on) => {
+  const app = fakeApp(on)
+  on('turn.complete', ($, e) => ({ text: e.answer }) as never)
+  await $.session.start(PROJECT)
+  await $.turn.complete({ answer: 'All done.', durationMs: 10, isAborted: false, turnId: 't1', reason: 'answered' } as never)
+  await app.clock.settle()
+  const stop = app.events.find(e => e.hook_event_name === 'Stop')
+  expect(stop?.usage).toEqual(expect.objectContaining({
+    contextPercent: 61, contextWindow: 200_000, costUsd: 1.25,
+    limits: [{ kind: 'five_hour', percentUsed: 42, resetsAt: '2026-10-16T18:00:00Z' }],
+  }))
 })
