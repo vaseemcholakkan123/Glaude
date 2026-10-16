@@ -9,7 +9,13 @@ extension Color {
 /// needs you (orange, pulsing), done (green check until you look).
 struct BubbleView: View {
     @ObservedObject var store: SessionStore
-    @State private var hovering = false
+    // Explicit State/FocusState values instead of the @State/@FocusState macros, which
+    // newer SDKs implement in a compiler plugin that the Command Line Tools don't ship.
+    private let hoveringState = State<Bool>(initialValue: false)
+    private var hovering: Bool {
+        get { hoveringState.wrappedValue }
+        nonmutating set { hoveringState.wrappedValue = newValue }
+    }
 
     var body: some View {
         let state = store.aggregateState

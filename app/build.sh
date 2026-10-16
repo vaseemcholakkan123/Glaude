@@ -7,7 +7,14 @@ APP=build/Glaude.app
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS"
 
-swiftc -O -target arm64-apple-macos14.0 -o "$APP/Contents/MacOS/Glaude" Sources/Glaude/*.swift
+if ! swiftc -O -target arm64-apple-macos14.0 -o "$APP/Contents/MacOS/Glaude" Sources/Glaude/*.swift; then
+  rm -rf "$APP"
+  echo >&2
+  echo "Glaude didn't build. If the errors mention a missing macro plugin, your Swift" >&2
+  echo "toolchain can't build SwiftUI macros: install Xcode, or download the prebuilt" >&2
+  echo "app from https://github.com/vaseemcholakkan123/Glaude/releases instead." >&2
+  exit 1
+fi
 
 
 cat > "$APP/Contents/Info.plist" <<'PLIST'

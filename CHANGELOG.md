@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.1.1]
+
+- Builds with Swift toolchains whose SDK makes SwiftUI's `@State` a macro: the app no longer uses the `@State` and `@FocusState` macros, which need a compiler plugin the Command Line Tools don't ship.
+- `app/build.sh` explains what to do when the build fails, and the README offers the prebuilt release first.
+
 ## [0.1.0]
 
 First public release.

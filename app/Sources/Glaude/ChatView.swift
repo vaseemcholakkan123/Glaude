@@ -207,7 +207,13 @@ private struct MessageRow: View {
 
 private struct ToolRun: View {
     let items: [ChatItem]
-    @State private var expanded = false
+    // Explicit State/FocusState values instead of the @State/@FocusState macros, which
+    // newer SDKs implement in a compiler plugin that the Command Line Tools don't ship.
+    private let expandedState = State<Bool>(initialValue: false)
+    private var expanded: Bool {
+        get { expandedState.wrappedValue }
+        nonmutating set { expandedState.wrappedValue = newValue }
+    }
 
     var body: some View {
         let visible = expanded ? items : Array(items.suffix(4))
@@ -267,8 +273,17 @@ private struct PendingCard: View {
     let request: PendingRequest
     @ObservedObject var store: SessionStore
     let openTerminal: () -> Void
-    @State private var picks: [String: Set<String>] = [:]
-    @State private var other: [String: String] = [:]
+    // See the note on ChatView's first State value: no @State macro.
+    private let picksState = State<[String: Set<String>]>(initialValue: [:])
+    private var picks: [String: Set<String>] {
+        get { picksState.wrappedValue }
+        nonmutating set { picksState.wrappedValue = newValue }
+    }
+    private let otherState = State<[String: String]>(initialValue: [:])
+    private var other: [String: String] {
+        get { otherState.wrappedValue }
+        nonmutating set { otherState.wrappedValue = newValue }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -417,17 +432,26 @@ private struct PendingCard: View {
 private struct InputBar: View {
     @ObservedObject var store: SessionStore
     let session: Session
-    @State private var draft = ""
-    @FocusState private var focused: Bool
+    // See the note on ChatView's first State value: no @State macro.
+    private let draftState = State<String>(initialValue: "")
+    private var draft: String {
+        get { draftState.wrappedValue }
+        nonmutating set { draftState.wrappedValue = newValue }
+    }
+    private let focusedState = FocusState<Bool>()
+    private var focused: Bool {
+        get { focusedState.wrappedValue }
+        nonmutating set { focusedState.wrappedValue = newValue }
+    }
 
     var body: some View {
         if store.canReply(session) {
             HStack(alignment: .bottom, spacing: 8) {
-                TextField("Message Claude…", text: $draft, axis: .vertical)
+                TextField("Message Claude…", text: draftState.projectedValue, axis: .vertical)
                     .textFieldStyle(.plain)
                     .font(.system(size: 12.5))
                     .lineLimit(1...8)
-                    .focused($focused)
+                    .focused(focusedState.projectedValue)
                     .onSubmit(send)
                     // Return sends; Shift+Return adds a line (at the end of the draft).
                     .onKeyPress(.return, phases: .down) { press in

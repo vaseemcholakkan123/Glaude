@@ -16,25 +16,25 @@ Glaude is a small bubble that floats at the edge of your screen while you work i
 
 - macOS 14 or later, on Apple silicon
 - Claude Code 2.1.301 or later, in a terminal (Glaude is a Claude Code [mod](https://code.claude.com/docs/en/plugins/mods/overview))
-- To build from source: the Xcode Command Line Tools (`xcode-select --install`)
+- Only to build from source: the Xcode Command Line Tools (`xcode-select --install`) or Xcode
 
 ## Install
 
 Glaude has two parts: the app, and a plugin that connects each Claude Code session to it.
 
-**1. The app.** Build it from source:
+**1. The app.** Download `Glaude-<version>-macos-arm64.zip` from [Releases](https://github.com/vaseemcholakkan123/Glaude/releases) and unzip it into Applications. The app is signed ad hoc, not notarized, so macOS blocks it the first time. Clear the block, then open it:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/Glaude.app
+open /Applications/Glaude.app
+```
+
+Or build it from source (this needs the Xcode Command Line Tools; if the build reports a missing macro plugin, install Xcode or use the release):
 
 ```bash
 git clone https://github.com/vaseemcholakkan123/Glaude.git
 cd Glaude
-./app/build.sh
-open app/build/Glaude.app
-```
-
-Or download `Glaude-<version>-macos-arm64.zip` from [Releases](https://github.com/vaseemcholakkan123/Glaude/releases) and unzip it. The app is signed ad hoc, not notarized, so macOS blocks it the first time. Clear the block with:
-
-```bash
-xattr -dr com.apple.quarantine Glaude.app
+./app/build.sh && open app/build/Glaude.app
 ```
 
 The bubble appears at the right edge of the screen, and a sparkle in the menu bar holds the settings.
