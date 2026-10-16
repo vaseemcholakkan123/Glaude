@@ -34,6 +34,8 @@ claude plugin validate .        # marketplace, manifest and hooks module
 claude plugin test mod          # mod/tests/*.test.ts
 ```
 
+CI runs the app build and `claude plugin validate .`. `claude plugin test` needs a signed-in Claude Code, so run the tests yourself before you push.
+
 To type-check, load the mod once with `--plugin-dir` (Claude Code then writes its types to `mod/.claude-plugin/types/`), then run `npx tsc -p mod`.
 
 The protocol between the two parts:

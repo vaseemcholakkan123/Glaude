@@ -26,5 +26,5 @@ jobs:
         run: npm install -g @anthropic-ai/claude-code
       - name: Validate the marketplace, manifest and hooks module
         run: claude plugin validate .
-      - name: Run the mod's tests
-        run: claude plugin test mod
+      # `claude plugin test` isn't available on a runner that isn't signed in to
+      # Claude Code, so the mod's tests run locally (see CONTRIBUTING.md).
