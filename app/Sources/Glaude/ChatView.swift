@@ -7,6 +7,7 @@ struct ChatView: View {
     let onClose: () -> Void
     let onOpenTerminal: (Session) -> Void
     let onToggleSize: () -> Void
+    let onShowMenu: () -> Void
 
     var body: some View {
         VStack(spacing: 0) {
@@ -46,6 +47,7 @@ struct ChatView: View {
             }
             iconButton(panelSize.isLarge ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right",
                        help: panelSize.isLarge ? "Make smaller" : "Make larger") { onToggleSize() }
+            iconButton("ellipsis", help: "Settings: bubble, sounds, notifications…") { onShowMenu() }
             iconButton("xmark", help: "Close") { onClose() }
         }
         .padding(.horizontal, 10)

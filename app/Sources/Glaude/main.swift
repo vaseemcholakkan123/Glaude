@@ -249,7 +249,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             panelSize: panelSize,
             onClose: { [weak self] in self?.hideChat() },
             onOpenTerminal: { session in TerminalFocus.reveal(session) },
-            onToggleSize: { [weak self] in self?.toggleChatSize() }
+            onToggleSize: { [weak self] in self?.toggleChatSize() },
+            onShowMenu: { [weak self] in self?.showMenuAtPointer() }
         )
         let host = ClickThroughHostingView(rootView: view)
         host.sizingOptions = []  // the window's size drives the view, not the other way round
@@ -429,6 +430,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let menu = NSMenu()
         menu.delegate = self
         statusItem.menu = menu
+        // The same menu on a right-click of the bubble or tab: the menu-bar icon can end
+        // up hidden behind the notch on a crowded menu bar.
+        bubble.contentView?.menu = menu
+    }
+
+    /// The settings menu at the pointer, for the panel's ⋯ button.
+    private func showMenuAtPointer() {
+        guard let menu = statusItem.menu else { return }
+        menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
     }
 
     private func rebuildMenu(_ menu: NSMenu) {
