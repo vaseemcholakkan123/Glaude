@@ -1,0 +1,15 @@
+{
+  "name": "glaude",
+  "description": "Glaude: a tiny desktop companion for Claude Code on macOS.",
+  "owner": {
+    "name": "Vaseem Cholakkan",
+    "url": "https://github.com/vaseemcholakkan123"
+  },
+  "plugins": [
+    {
+      "name": "glaude",
+      "source": "./mod",
+      "description": "Connects Claude Code to the Glaude desktop companion for macOS."
+    }
+  ]
+}

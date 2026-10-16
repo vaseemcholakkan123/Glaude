@@ -1,0 +1,9 @@
+# Build output
+app/build/
+*.zip
+
+# Written by Claude Code each time it loads the mod (regenerated per build)
+mod/.claude-plugin/types/
+
+.DS_Store
+*.log
