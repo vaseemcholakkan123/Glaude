@@ -73,6 +73,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// The session a "needs you" peek is about, so it can go once that's resolved.
     private var needsYouPeekSession: String?
     private var dragStart: (mouse: NSPoint, origin: NSPoint)?
+    private var isDragging = false
+    /// How far a press has to move before it's a drag rather than a click.
+    private static let dragThreshold: CGFloat = 4
     private var outsideClickMonitor: Any?
     private let hotkeys = Hotkeys()
     private let dock = BubbleDock()
@@ -148,10 +151,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         bubble = FloatingPanel(size: NSSize(width: 64, height: 64))
         bubble.hasShadow = false
         let view = BubbleView(store: store, dock: dock) { [weak self] inside in self?.bubbleHoverChanged(inside) }
-            .gesture(DragGesture(minimumDistance: 3)
-                .onChanged { [weak self] _ in self?.dragChanged() }
-                .onEnded { [weak self] _ in self?.dragEnded() })
-            .onTapGesture { [weak self] in self?.toggleChat() }
+            // One gesture for both: a press that moves less than a few points is a click,
+            // so a slightly moving trackpad click isn't lost as a tiny drag.
+            .gesture(DragGesture(minimumDistance: 0)
+                .onChanged { [weak self] _ in self?.pressChanged() }
+                .onEnded { [weak self] _ in self?.pressEnded() })
         bubble.contentView = ClickThroughHostingView(rootView: view)
 
         let frame = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
@@ -195,7 +199,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         guard let visible = screen?.visibleFrame else { return }
         dock.onLeftEdge = expanded.midX < visible.midX
         let tab = BubbleDock.tabSize
-        let collapsedFrame = NSRect(x: dock.onLeftEdge ? visible.minX : visible.maxX - tab.width,
+        // Inside the bubble's own footprint, so a pointer on the tab is still on the bubble
+        // once it slides out (no expand/collapse flicker at the very edge).
+        let collapsedFrame = NSRect(x: dock.onLeftEdge ? expanded.minX : expanded.maxX - tab.width,
                                     y: expanded.midY - tab.height / 2, width: tab.width, height: tab.height)
         if collapsed { hidePeek() }
         dock.collapsed = collapsed
@@ -207,19 +213,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         updateBubblePresence()
     }
 
-    private func dragChanged() {
-        guard !dock.collapsed else { return }
+    /// Screen coordinates throughout: the window moves under the pointer while dragging.
+    private func pressChanged() {
         let mouse = NSEvent.mouseLocation
         if dragStart == nil { dragStart = (mouse, bubble.frame.origin) }
         guard let start = dragStart else { return }
+        if !isDragging {
+            guard !dock.collapsed, hypot(mouse.x - start.mouse.x, mouse.y - start.mouse.y) >= Self.dragThreshold else { return }
+            isDragging = true
+        }
         bubble.setFrameOrigin(NSPoint(x: start.origin.x + mouse.x - start.mouse.x,
                                       y: start.origin.y + mouse.y - start.mouse.y))
         if chat.isVisible { positionNextToBubble(chat) }
     }
 
-    private func dragEnded() {
+    private func pressEnded() {
+        let wasDragging = isDragging
         dragStart = nil
-        snapBubble(animated: true)
+        isDragging = false
+        if wasDragging { snapBubble(animated: true) } else { toggleChat() }
     }
 
     /// Snap to the nearest left/right edge of the screen the bubble is on.
