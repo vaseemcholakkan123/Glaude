@@ -82,7 +82,7 @@ Leave `answerPermissions` off if you use auto mode. A plugin can't tell which pe
 
 `claude plugin validate mod` lists it:
 
-- **Events:** `session.start`, `session.end`, `prompt.submit`, `tool.call`, `tool.check`, `turn.complete`
+- **Events:** `session.start`, `session.end`, `prompt.submit`, `tool.call`, `tool.check`, `turn.complete`, and `ui.render` for the terminal's run-in-background pill. It draws nothing; the pill tells it a call is running, so a permission card can go.
 - **Calls:**
   - `$.http.fetch`, to `127.0.0.1` only
   - `$.fs.read`, for `~/.glaude/port` and `~/.glaude/token`

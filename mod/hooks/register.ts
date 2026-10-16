@@ -18,6 +18,8 @@ const WAIT_LIMIT_MS = 120_000
  * card only appears for a call that is still waiting (most likely on you) by then.
  */
 const ASK_NOTICE_MS = 6_000
+/** Prompts the engine makes itself, which Glaude doesn't show as yours. */
+const MACHINE_PROMPTS = new Set(['task-notification', 'auto-continuation', 'observer', 'observer-activity', 'coordinator'])
 /** Tools whose terminal dialog asks the person whatever the permission mode. */
 const ASKS_ITSELF = new Set(['AskUserQuestion', 'ExitPlanMode'])
 
@@ -27,6 +29,8 @@ let pid = 0
 let stopped = false
 /** Asks not yet flagged, by tool_use_id: cancelled once the call goes ahead. */
 const openAsks = new Map<string, Timer>()
+/** Asks Glaude is showing a card for, by tool_use_id. */
+const flaggedAsks = new Set<string>()
 
 async function connect($: EngineInterface): Promise<Conn | undefined> {
   if (conn) return conn
@@ -115,6 +119,14 @@ async function claudePid($: EngineInterface): Promise<number> {
   }
 }
 
+/** The call went ahead (it's running, or finished): it no longer waits on you. */
+function callProceeded($: EngineInterface, id: string, finished: boolean) {
+  openAsks.get(id)?.cancel()
+  openAsks.delete(id)
+  // A finished call's PostToolUse clears the card; a running one needs telling.
+  if (flaggedAsks.delete(id) && !finished) report($, 'ToolRunning', { tool_use_id: id })
+}
+
 /** A tool call's own arguments, without the engine's fields. */
 function toolInput(e: Payload): Payload {
   const { tool: _tool, tool_use_id: _id, agentId: _agent, consent: _consent, ...input } = e
@@ -141,7 +153,8 @@ export const register: Register = (on, options) => {
 
   on('prompt.submit', async ($, e, next) => {
     const result = await next(e)
-    if (cwd && !e.isMeta && !e.command && !('drop' in result && result.drop)) {
+    const machine = MACHINE_PROMPTS.has(e.origin?.kind ?? '')
+    if (cwd && !e.isMeta && !e.command && !machine && !('drop' in result && result.drop)) {
       report($, 'UserPromptSubmit', { prompt: e.text })
     }
     return result
@@ -163,10 +176,7 @@ export const register: Register = (on, options) => {
     if (e.tool === 'ExitPlanMode') report($, 'PlanReady', { tool_name: e.tool })
 
     const result = await next(e)
-    if (e.tool_use_id) {
-      openAsks.get(e.tool_use_id)?.cancel()
-      openAsks.delete(e.tool_use_id)
-    }
+    if (e.tool_use_id) callProceeded($, e.tool_use_id, true)
     report($, 'PostToolUse', { tool_name: e.tool, tool_input: input })
     return result
   }).catch(($, e, next) => next(e))
@@ -180,7 +190,9 @@ export const register: Register = (on, options) => {
     if (!answerPermissions) {
       const id = e.tool_use_id
       openAsks.set(id, $.clock.after(ASK_NOTICE_MS, () => {
-        if (openAsks.delete(id)) report($, 'PermissionAsk', fields)
+        if (!openAsks.delete(id)) return
+        flaggedAsks.add(id)
+        report($, 'PermissionAsk', { ...fields, tool_use_id: id })
       }))
       return verdict
     }
@@ -189,6 +201,13 @@ export const register: Register = (on, options) => {
     if (answer?.decision === 'deny') return { ...verdict, decision: 'deny', reason: 'Denied in Glaude' }
     return verdict
   }).catch(($, e, next) => next(e))
+
+  // The terminal draws a run-in-background pill under a call that's running: by then
+  // the ask was answered (by you or the auto-mode classifier), so drop its card.
+  on('ui.render', { component: 'ToolProgress' }, ($, e, next) => {
+    if (e.props.tool_use_id) callProceeded($, e.props.tool_use_id, false)
+    return next(e)
+  })
 
   on('turn.complete', async ($, e, next) => {
     const result = await next(e)

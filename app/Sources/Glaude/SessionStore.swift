@@ -168,6 +168,10 @@ final class SessionStore: ObservableObject {
             let input = json["tool_input"] as? [String: Any] ?? [:]
             showTerminalCard(sessionID, title: "Allow \(tool)?", detail: permissionDetail(tool: tool, input: input))
 
+        case "ToolRunning":
+            // The permission ask was answered (often by the auto-mode classifier).
+            update(sessionID) { s in Self.clearTerminalCard(&s) }
+
         case "PlanReady":
             showTerminalCard(sessionID, title: "Plan ready for approval", detail: "Approve, edit or reject the plan in the terminal.")
 

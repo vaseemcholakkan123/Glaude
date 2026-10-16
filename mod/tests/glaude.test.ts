@@ -128,3 +128,13 @@ test('a permission query (no real call) is not reported or held', async ($, on) 
   expect(app.waits).toEqual([])
   expect(eventNames(app)).not.toContain('PermissionAsk')
 })
+
+test('a background-task notification is not shown as your prompt', async ($, on) => {
+  const app = fakeApp(on)
+  await $.session.start(PROJECT)
+  await $.prompt.submit({ text: '<task-notification>done</task-notification>', origin: { kind: 'task-notification' }, wait: false } as never)
+  await $.prompt.submit({ text: 'typed by you', origin: { kind: 'composer' }, wait: false } as never)
+  await app.clock.settle()
+  const prompts = app.events.filter(e => e.hook_event_name === 'UserPromptSubmit').map(e => e.prompt)
+  expect(prompts).toEqual(['typed by you'])
+})
