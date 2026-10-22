@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.2.1]
+
+- **Bubble clicks always register.** A click that moves the pointer by a few points (common on trackpads) used to count as a tiny drag and was lost. Now anything under 4 pt of movement is a click.
+- With "Only When Claude Needs You", the edge tab now sits inside the bubble's own space, so the bubble no longer flickers in and out when the pointer is at the very edge of the screen.
+
 ## [0.2.0]
 
 - **Edit diffs:** Edit and Write steps show `+N −M`; click one to see the diff. Done cards and summaries show the turn's totals.
