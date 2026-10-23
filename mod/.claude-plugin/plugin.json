@@ -1,6 +1,6 @@
 {
   "name": "glaude",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Connects Claude Code to the Glaude desktop companion: a floating bubble that shows when Claude is working, done, or needs you, and lets you reply from it.",
   "author": {
     "name": "Vaseem Cholakkan",
@@ -19,7 +19,7 @@
     "answerPermissions": {
       "type": "boolean",
       "title": "Answer permission prompts in Glaude",
-      "description": "Show Allow/Deny buttons in Glaude for permission prompts. Claude waits for your answer there (up to 2 minutes, then the terminal prompt appears). Leave off if you use auto mode: it would also hold calls the auto-mode classifier decides.",
+      "description": "Show Allow/Deny buttons in Glaude for permission prompts. Claude waits for your answer there (up to 2 minutes, then the terminal prompt appears). In auto mode Glaude never holds a call: the auto-mode classifier still decides, and Glaude only shows a notice.",
       "default": false
     },
     "notifications": {

@@ -28,6 +28,22 @@ const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit'])
 const PATCH_LINE_LIMIT = 400
 /** Session ends after which the process goes on under another session id: /clear, and /resume. */
 const CONTINUING_END_REASONS = new Set(['clear', 'resume'])
+/**
+ * Modes whose ask goes to the terminal dialog, which Glaude can answer in its place.
+ * In auto mode the classifier settles an ask only after `tool.check` returns, so
+ * holding the check for Glaude would stall it; Glaude never holds one there, or in a
+ * mode it can't name.
+ */
+const DIALOG_MODES = new Set(['default', 'acceptEdits'])
+/** The footer label a shift+tab shows for a moment ("auto mode on"), by mode. */
+const MODE_LABELS: Record<string, string> = {
+  'manual mode': 'default',
+  'default mode': 'default',
+  'auto mode': 'auto',
+  'accept edits': 'acceptEdits',
+  'plan mode': 'plan',
+  'bypass permissions': 'bypassPermissions',
+}
 
 let conn: Conn | undefined
 let cwd = ''
@@ -37,6 +53,8 @@ let pid = 0
 let tty = ''
 /** The `notifications` option: who notifies, as the app needs to know. */
 let notifyMode = 'glaude'
+/** The session's permission mode as far as the mod can tell; undefined when it can't. */
+let permissionMode: string | undefined
 let stopped = false
 /** Asks not yet flagged, by tool_use_id: cancelled once the call goes ahead. */
 const openAsks = new Map<string, Timer>()
@@ -128,15 +146,47 @@ async function pollReplies($: EngineInterface) {
   }
 }
 
-/** The claude process's id and terminal, so Glaude can bring the session's own tab forward. */
-async function claudeIdentity($: EngineInterface): Promise<{ pid: number; tty: string }> {
+/**
+ * The claude process's id and terminal, so Glaude can bring the session's own tab
+ * forward, and its command line, for the permission mode it was started in.
+ */
+async function claudeIdentity($: EngineInterface): Promise<{ pid: number; tty: string; args: string }> {
   try {
-    const { stdout } = await $.process.run(['/bin/sh', '-c', 'echo $PPID; ps -o tty= -p $PPID'], { timeoutMs: 2_000 })
-    const [pidLine = '', ttyLine = ''] = stdout.split('\n').map(line => line.trim())
+    const { stdout } = await $.process.run(['/bin/sh', '-c', 'echo $PPID; ps -o tty= -p $PPID; ps -o args= -p $PPID'], { timeoutMs: 2_000 })
+    const [pidLine = '', ttyLine = '', args = ''] = stdout.split('\n').map(line => line.trim())
     const name = ttyLine && ttyLine !== '??' ? ttyLine : ''
-    return { pid: Number(pidLine) || 0, tty: name ? `/dev/${name.replace(/^\/dev\//, '')}` : '' }
+    return { pid: Number(pidLine) || 0, tty: name ? `/dev/${name.replace(/^\/dev\//, '')}` : '', args }
   } catch {
-    return { pid: 0, tty: '' }
+    return { pid: 0, tty: '', args: '' }
+  }
+}
+
+/** The permission mode a `claude` command line asks for, if it names one. */
+export function launchMode(args: string): string | undefined {
+  if (/(?:^|\s)--dangerously-skip-permissions(?:\s|$)/.test(args)) return 'bypassPermissions'
+  return /(?:^|\s)--permission-mode(?:=|\s+)(\S+)/.exec(args)?.[1]
+}
+
+/**
+ * The mode a shift+tab just switched to, from the prompt hint's label ("auto mode on
+ * (shift+tab to cycle)"): `unknown` for a label the mod doesn't know, undefined when the
+ * hint carries no label.
+ */
+export function modeFromHint(hint: string): string | undefined {
+  const label = /^([a-z' ]+?) on\b/i.exec(hint.trim())?.[1]?.toLowerCase()
+  if (!label) return undefined
+  return MODE_LABELS[label] ?? 'unknown'
+}
+
+/** The mode the session starts in: the command line's, else settings' defaultMode. */
+async function startingMode($: EngineInterface, args: string): Promise<string | undefined> {
+  const fromFlags = launchMode(args)
+  if (fromFlags) return fromFlags
+  try {
+    const permissions = (await $.settings.read()).permissions as { defaultMode?: unknown } | undefined
+    return typeof permissions?.defaultMode === 'string' ? permissions.defaultMode : 'default'
+  } catch {
+    return undefined
   }
 }
 
@@ -214,7 +264,9 @@ export const register: Register = (on, options) => {
     if (!e.isInteractive) return next(e) // nobody to show a bubble to (claude -p, SDK)
     cwd = e.cwd
     launchDir = (await $.env.get('PWD')) ?? e.cwd
-    ;({ pid, tty } = await claudeIdentity($))
+    const identity = await claudeIdentity($)
+    ;({ pid, tty } = identity)
+    permissionMode = await startingMode($, identity.args)
     void usageFields($).then(usage => report($, 'SessionStart', usage))
     $.clock.after(0, () => { void pollReplies($) })
     return next(e)
@@ -262,7 +314,7 @@ export const register: Register = (on, options) => {
     // isn't covered above.
     if (!cwd || verdict.decision !== 'ask' || !e.tool_use_id || ASKS_ITSELF.has(e.tool)) return verdict
     const fields = { tool_name: e.tool, tool_input: e.input, reason: verdict.reason ?? null }
-    if (!answerPermissions) {
+    if (!answerPermissions || !DIALOG_MODES.has(permissionMode ?? '')) {
       const id = e.tool_use_id
       openAsks.set(id, $.clock.after(ASK_NOTICE_MS, () => {
         if (!openAsks.delete(id)) return
@@ -276,6 +328,13 @@ export const register: Register = (on, options) => {
     if (answer?.decision === 'deny') return { ...verdict, decision: 'deny', reason: 'Denied in Glaude' }
     return verdict
   }).catch(($, e, next) => next(e))
+
+  // A shift+tab shows the new mode in the prompt hint for a moment: follow it.
+  on('ui.render', { component: 'PromptHint' }, ($, e, next) => {
+    const mode = modeFromHint(e.props.hint)
+    if (mode) permissionMode = mode
+    return next(e)
+  })
 
   // The terminal draws a run-in-background pill under a call that's running: by then
   // the ask was answered (by you or the auto-mode classifier), so drop its card.

@@ -224,7 +224,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         bubble.setFrameOrigin(NSPoint(x: start.origin.x + mouse.x - start.mouse.x,
                                       y: start.origin.y + mouse.y - start.mouse.y))
-        if chat.isVisible { positionNextToBubble(chat) }
+        keepPanelsBesideBubble()
     }
 
     private func pressEnded() {
@@ -245,7 +245,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let target = NSRect(origin: NSPoint(x: x, y: y), size: size)
         bubble.setFrame(target, display: true, animate: animated)
         UserDefaults.standard.set(NSStringFromPoint(target.origin), forKey: "bubbleOrigin")
-        if chat.isVisible { positionNextToBubble(chat) }
+        keepPanelsBesideBubble()
     }
 
     // MARK: Chat panel
@@ -321,6 +321,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             outsideClickMonitor = nil
         }
         updateBubblePresence()
+    }
+
+    /// The open panel and the peek card follow the bubble when it moves.
+    private func keepPanelsBesideBubble() {
+        if chat.isVisible { positionNextToBubble(chat) }
+        if peek.isVisible { positionNextToBubble(peek) }
     }
 
     /// Place a panel beside the bubble, on the side facing the middle of the screen.

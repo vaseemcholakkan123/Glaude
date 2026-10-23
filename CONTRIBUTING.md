@@ -55,6 +55,7 @@ The kit's tests can't produce a real tool call's `tool_use_id`, so check the per
 
 1. A command or file write that asks for permission shows Glaude's **Allow …?** card, and answering in the terminal clears it.
 2. With `answerPermissions` on (`/plugin configure glaude@glaude`), **Allow** and **Deny** in Glaude decide the call.
+3. Still with `answerPermissions` on, switch to auto mode (shift+tab). A call the classifier approves runs without waiting on Glaude, and one that still needs you shows a card with **Open terminal**, not Allow/Deny.
 
 ## Releasing
 

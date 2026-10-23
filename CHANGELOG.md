@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.2.3]
+
+- **`answerPermissions` no longer stalls auto mode.** With the option on, Glaude held every call that asked for permission until you clicked Allow, which also kept the auto-mode classifier from deciding: the terminal showed no prompt and the call waited. Glaude now only holds calls in modes where the terminal would ask you (default and accept edits). In auto mode, and in any mode it can't identify, it shows a notice and never blocks. It follows the mode a session starts in and each shift+tab switch.
+- The peek card follows the bubble when you drag it.
+
 ## [0.2.2]
 
 - **Replies work after `/resume`.** Resuming another conversation inside a running session stopped that session from taking replies from Glaude ("Install the glaude plugin to reply from here"), though everything else kept working. Now only leaving the session stops them.

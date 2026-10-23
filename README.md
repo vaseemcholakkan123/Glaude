@@ -75,7 +75,7 @@ Settings live in the menu under the ✦ icon in the menu bar. The same menu open
 | `answerPermissions` | off | Adds **Allow** and **Deny** buttons to Glaude's permission cards. Claude waits up to 2 minutes for your answer there, then shows the terminal prompt. |
 | `notifications` | `glaude` | Who sends notifications: `glaude` (Glaude's own, with buttons), `claude` (Claude Code's channel from `/config`, finished turns only, no buttons) or `off`. |
 
-Leave `answerPermissions` off if you use auto mode. A plugin can't tell which permission mode a session is in, so with this option on, Glaude would also hold calls that the auto-mode classifier would otherwise decide by itself. Change the option with `/plugin configure glaude@glaude`.
+In auto mode, Glaude never holds a call, even with `answerPermissions` on: the auto-mode classifier decides as usual, and a card appears only for a call that is still waiting on you after a few seconds, with **Open terminal** instead of the buttons. Glaude follows the mode a session starts in (`--permission-mode`, or `defaultMode` in your settings) and each shift+tab switch after that. Change the option with `/plugin configure glaude@glaude`.
 
 ## How it works
 

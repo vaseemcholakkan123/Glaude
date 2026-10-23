@@ -1,6 +1,7 @@
 import type { On } from 'claude-code'
 import type { MockClock } from 'claude-code/testing'
 import { expect, mock, test } from 'claude-code/testing'
+import { launchMode, modeFromHint } from '../hooks/register'
 
 // A stand-in for Glaude.app beneath the plugin: it answers the mod's localhost
 // requests, the files and command the mod reads, and records what it was sent.
@@ -192,4 +193,22 @@ test('a finished turn carries plan limits and context fill', async ($, on) => {
     contextPercent: 61, contextWindow: 200_000, costUsd: 1.25,
     limits: [{ kind: 'five_hour', percentUsed: 42, resetsAt: '2026-10-16T18:00:00Z' }],
   }))
+})
+
+test('the starting permission mode is read from the command line', () => {
+  expect(launchMode('claude --permission-mode auto')).toBe('auto')
+  expect(launchMode('claude --permission-mode=acceptEdits -c')).toBe('acceptEdits')
+  expect(launchMode('claude --dangerously-skip-permissions')).toBe('bypassPermissions')
+  expect(launchMode('claude --allow-dangerously-skip-permissions')).toBeUndefined()
+  expect(launchMode('claude --resume 1d77771d')).toBeUndefined()
+})
+
+test('a shift+tab mode switch is read from the prompt hint', () => {
+  expect(modeFromHint('auto mode on (shift+tab to cycle) · ⧉ notes')).toBe('auto')
+  expect(modeFromHint('manual mode on · ⧉ notes')).toBe('default')
+  expect(modeFromHint('accept edits on (shift+tab to cycle)')).toBe('acceptEdits')
+  expect(modeFromHint('plan mode on (shift+tab to cycle)')).toBe('plan')
+  expect(modeFromHint('focus mode on (shift+tab to cycle)')).toBe('unknown')
+  expect(modeFromHint('(shift+tab to cycle) · ⧉ notes')).toBeUndefined()
+  expect(modeFromHint('Pasting…')).toBeUndefined()
 })
