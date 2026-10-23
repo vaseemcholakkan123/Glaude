@@ -47,6 +47,24 @@ final class ClickThroughHostingView<Content: View>: NSHostingView<Content> {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 
+/// The bubble's view: presses are read here, in AppKit, rather than by a SwiftUI gesture,
+/// which could drop one (just after the panel took the keyboard, say) and leave a drag
+/// half-done. AppKit sends every mouseDown's mouseUp to the same view.
+final class BubbleHostingView<Content: View>: NSHostingView<Content> {
+    var onPress: (() -> Void)?
+    var onDrag: (() -> Void)?
+    var onRelease: (() -> Void)?
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override func mouseDown(with event: NSEvent) { onPress?() }
+    override func mouseDragged(with event: NSEvent) { onDrag?() }
+    override func mouseUp(with event: NSEvent) { onRelease?() }
+    // The hosting view keeps right-clicks for SwiftUI, so the menu set on it never showed.
+    override func rightMouseDown(with event: NSEvent) {
+        if let menu { NSMenu.popUpContextMenu(menu, with: event, for: self) } else { super.rightMouseDown(with: event) }
+    }
+}
+
 /// The chat panel's size, which the panel's expand button reads and toggles.
 final class PanelSizeModel: ObservableObject {
     static let compact = NSSize(width: 340, height: 460)
@@ -151,12 +169,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         bubble = FloatingPanel(size: NSSize(width: 64, height: 64))
         bubble.hasShadow = false
         let view = BubbleView(store: store, dock: dock) { [weak self] inside in self?.bubbleHoverChanged(inside) }
-            // One gesture for both: a press that moves less than a few points is a click,
-            // so a slightly moving trackpad click isn't lost as a tiny drag.
-            .gesture(DragGesture(minimumDistance: 0)
-                .onChanged { [weak self] _ in self?.pressChanged() }
-                .onEnded { [weak self] _ in self?.pressEnded() })
-        bubble.contentView = ClickThroughHostingView(rootView: view)
+        // One press handler for both: a press that moves less than a few points is a click,
+        // so a slightly moving trackpad click isn't lost as a tiny drag.
+        let host = BubbleHostingView(rootView: view)
+        host.onPress = { [weak self] in self?.pressBegan() }
+        host.onDrag = { [weak self] in self?.pressChanged() }
+        host.onRelease = { [weak self] in self?.pressEnded() }
+        bubble.contentView = host
 
         let frame = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
         let saved = UserDefaults.standard.string(forKey: "bubbleOrigin").map(NSPointFromString)
@@ -211,6 +230,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func bubbleHoverChanged(_ inside: Bool) {
         bubbleHovering = inside
         updateBubblePresence()
+    }
+
+    /// Every press starts over, whatever an earlier one left behind.
+    private func pressBegan() {
+        dragStart = (NSEvent.mouseLocation, bubble.frame.origin)
+        isDragging = false
     }
 
     /// Screen coordinates throughout: the window moves under the pointer while dragging.
@@ -303,7 +328,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         store.markSeen()
         updateBubblePresence(animated: false)  // the panel opens beside the bubble, so bring it out
         positionNextToBubble(chat)
-        chat.makeKeyAndOrderFront(nil)
+        // Regardless, as the bubble and peek are shown: macOS can refuse a plain orderFront
+        // from an app that isn't active, which left the panel hidden on a click.
+        chat.orderFrontRegardless()
+        chat.makeKey()
+        if !chat.isVisible || !chat.isOnActiveSpace {
+            NSLog("Glaude: the panel didn't show (visible \(chat.isVisible), on active space \(chat.isOnActiveSpace), frame \(NSStringFromRect(chat.frame)))")
+        }
         // A click in any other app closes the panel. Clicks on Glaude's own windows
         // (the bubble toggles it) never reach a global monitor.
         if outsideClickMonitor == nil {

@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.6]
+
+- **Bubble clicks always register.** Presses on the bubble are now read by the app itself instead of a SwiftUI gesture, which could drop a click (especially right after the panel opened) and then get stuck, so that neither clicks nor ⌃⌥G opened the panel until Glaude was restarted. A press that moves less than 4 pt is still a click.
+- The panel is brought forward the way the bubble and done card are, which macOS doesn't refuse for an app in the background. If it still doesn't show, Glaude logs why.
+- **Right-click on the bubble opens the settings menu.** It was meant to since 0.2.0 but never did.
+
 ## [0.2.5]
 
 - **Answer permissions in Glaude or in the terminal.** With `answerPermissions` on, a held call is now asked in both places at once: **Allow/Deny** in Glaude, and a band above the terminal's prompt where **1**, **2** or **3** answers it (3 brings up Claude Code's own dialog). The first answer wins and takes the other one down.
