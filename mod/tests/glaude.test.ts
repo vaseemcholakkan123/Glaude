@@ -30,6 +30,7 @@ function fakeApp(on: On): FakeApp {
   } }) as never)
   on('session.id', () => ({ value: 'session-1' }))
   on('session.start', ($, e) => ({ cwd: e.cwd }))
+  on('session.end', ($, e) => ({ sessionId: e.sessionId }))
   on('prompt.submit', ($, e) => {
     app.submitted.push(e.text)
     return { text: e.text }
@@ -81,6 +82,27 @@ test('a reply typed in Glaude is submitted as a prompt', async ($, on) => {
   await $.session.start(PROJECT)
   await app.clock.settle()
   expect(app.submitted).toContain('please also update the README')
+})
+
+test('replies keep working after /resume in the same process', async ($, on) => {
+  const app = fakeApp(on)
+  await $.session.start(PROJECT)
+  await app.clock.settle()
+  await $.session.end({ reason: 'resume', sessionId: 'session-1' } as never)
+  app.replies.push('carry on')
+  await app.clock.advance(25_000) // the poll that was open when it ended comes back
+  expect(app.submitted).toContain('carry on')
+})
+
+test('replies stop once the person leaves the session', async ($, on) => {
+  const app = fakeApp(on)
+  await $.session.start(PROJECT)
+  await app.clock.settle()
+  await $.session.end({ reason: 'prompt_input_exit', sessionId: 'session-1' } as never)
+  await app.clock.settle()
+  app.replies.push('too late')
+  await app.clock.advance(25_000)
+  expect(app.submitted).not.toContain('too late')
 })
 
 test('prompts and finished turns are reported', async ($, on) => {

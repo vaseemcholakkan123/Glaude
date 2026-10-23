@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.2.2]
+
+- **Replies work after `/resume`.** Resuming another conversation inside a running session stopped that session from taking replies from Glaude ("Install the glaude plugin to reply from here"), though everything else kept working. Now only leaving the session stops them.
+- If a single reply check fails, the session keeps checking instead of giving up on replies.
+
 ## [0.2.1]
 
 - **Bubble clicks always register.** A click that moves the pointer by a few points (common on trackpads) used to count as a tiny drag and was lost. Now anything under 4 pt of movement is a click.

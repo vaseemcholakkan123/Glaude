@@ -26,6 +26,8 @@ const ASKS_ITSELF = new Set(['AskUserQuestion', 'ExitPlanMode'])
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit'])
 /** The most diff lines sent per edit; the rest is counted, not shown. */
 const PATCH_LINE_LIMIT = 400
+/** Session ends after which the process goes on under another session id: /clear, and /resume. */
+const CONTINUING_END_REASONS = new Set(['clear', 'resume'])
 
 let conn: Conn | undefined
 let cwd = ''
@@ -108,17 +110,22 @@ async function waitForGlaude($: EngineInterface, event: string, fields: Payload,
   return undefined
 }
 
-/** One reply long-poll; schedules the next. A reply becomes a prompt of its own. */
+/** One reply long-poll; schedules the next, whatever happens. A reply becomes a prompt of its own. */
 async function pollReplies($: EngineInterface) {
   if (stopped) return
-  const session = await $.session.id()
-  const res = await call($, 'GET', `/reply/next?session=${encodeURIComponent(session)}&cwd=${encodeURIComponent(cwd)}&pid=${pid}`)
-  if (res?.status === 200) {
-    const { text } = JSON.parse(res.text) as { text?: string }
-    if (text) void $.prompt.submit({ text })
+  let delay = RETRY_MS
+  try {
+    const session = await $.session.id()
+    const res = await call($, 'GET', `/reply/next?session=${encodeURIComponent(session)}&cwd=${encodeURIComponent(cwd)}&pid=${pid}`)
+    if (res?.status === 200) {
+      const { text } = JSON.parse(res.text) as { text?: string }
+      if (text) void $.prompt.submit({ text })
+    }
+    if (res?.status === 200 || res?.status === 204) delay = 0
+  } finally {
+    // A poll that fails must not end the loop: the session would stop taking replies.
+    $.clock.after(delay, () => { void pollReplies($) })
   }
-  const delay = res?.status === 200 || res?.status === 204 ? 0 : RETRY_MS
-  $.clock.after(delay, () => { void pollReplies($) })
 }
 
 /** The claude process's id and terminal, so Glaude can bring the session's own tab forward. */
@@ -215,7 +222,7 @@ export const register: Register = (on, options) => {
 
   on('session.end', async ($, e, next) => {
     report($, 'SessionEnd', { reason: e.reason })
-    if (e.reason !== 'clear') stopped = true // after /clear the session goes on under a new id
+    if (!CONTINUING_END_REASONS.has(e.reason)) stopped = true
     return next(e)
   })
 
