@@ -1,4 +1,6 @@
-import type { EngineInterface, Register, Timer } from 'claude-code'
+import type { EngineInterface, Register, RenderElement, Timer } from 'claude-code'
+import { atom, read, update } from 'claude-code'
+import type { HeldAsk } from '../types'
 
 // Glaude mod: reports this session to the Glaude desktop app on 127.0.0.1 and submits
 // the replies you type there. Every hook passes the event on unchanged unless Glaude
@@ -29,21 +31,10 @@ const PATCH_LINE_LIMIT = 400
 /** Session ends after which the process goes on under another session id: /clear, and /resume. */
 const CONTINUING_END_REASONS = new Set(['clear', 'resume'])
 /**
- * Modes whose ask goes to the terminal dialog, which Glaude can answer in its place.
- * In auto mode the classifier settles an ask only after `tool.check` returns, so
- * holding the check for Glaude would stall it; Glaude never holds one there, or in a
- * mode it can't name.
+ * How long a prompt hint must stand before the mod reads the mode from it: a shift+tab
+ * flashes a label first, and passing states ("Pasting…") come and go.
  */
-const DIALOG_MODES = new Set(['default', 'acceptEdits'])
-/** The footer label a shift+tab shows for a moment ("auto mode on"), by mode. */
-const MODE_LABELS: Record<string, string> = {
-  'manual mode': 'default',
-  'default mode': 'default',
-  'auto mode': 'auto',
-  'accept edits': 'acceptEdits',
-  'plan mode': 'plan',
-  'bypass permissions': 'bypassPermissions',
-}
+const HINT_SETTLE_MS = 600
 
 let conn: Conn | undefined
 let cwd = ''
@@ -53,8 +44,20 @@ let pid = 0
 let tty = ''
 /** The `notifications` option: who notifies, as the app needs to know. */
 let notifyMode = 'glaude'
-/** The session's permission mode as far as the mod can tell; undefined when it can't. */
+/**
+ * The session's permission mode as far as the mod can tell: `default` (manual), another
+ * mode's name or `other`, undefined when it can't tell. Glaude holds an ask only in the
+ * default mode, where the terminal dialog would wait on the person anyway. In auto mode
+ * the classifier settles an ask only after `tool.check` returns, so holding it there
+ * would stall the call.
+ */
 let permissionMode: string | undefined
+/** Counts prompt hints, so only the one still standing after HINT_SETTLE_MS counts. */
+let hintSeq = 0
+/** Calls held for Glaude, which the terminal's band shows too (see the contract in types/). */
+const HELD = atom({ plugin: 'glaude', key: 'held' } as const, [] as HeldAsk[])
+/** How each held call is answered from the terminal's band, by tool_use_id. */
+const terminalAnswers = new Map<string, (answer: 'allow' | 'deny' | 'terminal') => void>()
 let stopped = false
 /** Asks not yet flagged, by tool_use_id: cancelled once the call goes ahead. */
 const openAsks = new Map<string, Timer>()
@@ -104,9 +107,16 @@ async function envelope($: EngineInterface, event: string, fields: Payload): Pro
   }
 }
 
-/** Fire-and-forget status update: never holds up Claude. */
+/** The status updates in flight, chained so the app gets them in the order they happened. */
+let reporting: Promise<unknown> = Promise.resolve()
+
+/**
+ * Status update: never holds up Claude. Sent after the ones before it, or a slow one
+ * could land after a later "turn finished" and show a finished session as working.
+ */
 function report($: EngineInterface, event: string, fields: Payload = {}) {
-  void envelope($, event, fields).then(body => call($, 'POST', '/event', body))
+  const body = envelope($, event, fields)
+  reporting = reporting.then(() => body).then(message => call($, 'POST', '/event', message)).catch(() => {})
 }
 
 /**
@@ -126,6 +136,38 @@ async function waitForGlaude($: EngineInterface, event: string, fields: Payload,
   if (res?.status === 200 && !signal.aborted) return JSON.parse(res.text) as Payload
   cancel()
   return undefined
+}
+
+/** What a held call does, in a line or two for the band. */
+function askDetail(input: unknown): string {
+  const fields = (input ?? {}) as Payload
+  const text = [fields.command, fields.file_path, fields.notebook_path, fields.url].find(v => typeof v === 'string')
+  const detail = typeof text === 'string' ? text : JSON.stringify(input) ?? ''
+  return detail.length > 300 ? `${detail.slice(0, 300)}…` : detail
+}
+
+/**
+ * Holds a permission ask until it's answered in Glaude or in the terminal's band,
+ * whichever comes first, and takes the other one down. Undefined hands it to the
+ * terminal's own dialog: chosen there, in Glaude, or nobody answered in time.
+ */
+async function holdForAnswer($: EngineInterface, id: string, tool: string, input: unknown, fields: Payload, signal: AbortSignal): Promise<'allow' | 'deny' | undefined> {
+  const settled = new AbortController()
+  const onAbort = () => settled.abort()
+  signal.addEventListener('abort', onAbort, { once: true })
+  const fromTerminal = new Promise<'allow' | 'deny' | 'terminal'>(resolve => terminalAnswers.set(id, resolve))
+  await update($, HELD, held => [...held, { id, tool, detail: askDetail(input) }])
+  try {
+    const fromGlaude = waitForGlaude($, 'Permission', fields, settled.signal)
+      .then(answer => answer?.decision === 'allow' || answer?.decision === 'deny' ? answer.decision : 'terminal')
+    const answer = await Promise.race([fromGlaude, fromTerminal])
+    return answer === 'terminal' ? undefined : answer
+  } finally {
+    settled.abort() // answered in the terminal: Glaude's card goes
+    signal.removeEventListener('abort', onAbort)
+    terminalAnswers.delete(id)
+    await update($, HELD, held => held.filter(ask => ask.id !== id))
+  }
 }
 
 /** One reply long-poll; schedules the next, whatever happens. A reply becomes a prompt of its own. */
@@ -168,14 +210,16 @@ export function launchMode(args: string): string | undefined {
 }
 
 /**
- * The mode a shift+tab just switched to, from the prompt hint's label ("auto mode on
- * (shift+tab to cycle)"): `unknown` for a label the mod doesn't know, undefined when the
- * hint carries no label.
+ * What a settled prompt hint says about the mode. Every mode but the default draws its
+ * pill with "(shift+tab to cycle)"; the default mode draws none. A shift+tab first
+ * flashes the label of the mode being left ("manual mode on"), which says nothing, nor
+ * does a passing state ("Pasting…"). Undefined when the hint doesn't tell.
  */
-export function modeFromHint(hint: string): string | undefined {
-  const label = /^([a-z' ]+?) on\b/i.exec(hint.trim())?.[1]?.toLowerCase()
-  if (!label) return undefined
-  return MODE_LABELS[label] ?? 'unknown'
+export function modeFromHint(hint: string): 'default' | 'other' | undefined {
+  const text = hint.trim()
+  if (/shift\+tab to cycle/i.test(text)) return 'other'
+  if (/^[a-z' ]+ on\b/i.test(text) || text.endsWith('…')) return undefined
+  return 'default'
 }
 
 /** The mode the session starts in: the command line's, else settings' defaultMode. */
@@ -314,7 +358,7 @@ export const register: Register = (on, options) => {
     // isn't covered above.
     if (!cwd || verdict.decision !== 'ask' || !e.tool_use_id || ASKS_ITSELF.has(e.tool)) return verdict
     const fields = { tool_name: e.tool, tool_input: e.input, reason: verdict.reason ?? null }
-    if (!answerPermissions || !DIALOG_MODES.has(permissionMode ?? '')) {
+    if (!answerPermissions || permissionMode !== 'default') {
       const id = e.tool_use_id
       openAsks.set(id, $.clock.after(ASK_NOTICE_MS, () => {
         if (!openAsks.delete(id)) return
@@ -323,17 +367,40 @@ export const register: Register = (on, options) => {
       }))
       return verdict
     }
-    const answer = await waitForGlaude($, 'Permission', fields, next.signal)
-    if (answer?.decision === 'allow') return { ...verdict, decision: 'allow', reason: 'Allowed in Glaude' }
-    if (answer?.decision === 'deny') return { ...verdict, decision: 'deny', reason: 'Denied in Glaude' }
+    const answer = await holdForAnswer($, e.tool_use_id, e.tool, e.input, fields, next.signal)
+    if (answer === 'allow') return { ...verdict, decision: 'allow', reason: 'Allowed in Glaude' }
+    if (answer === 'deny') return { ...verdict, decision: 'deny', reason: 'Denied in Glaude' }
+    // Over to the terminal's own dialog, which waits on the person: keep Glaude saying so
+    // (the card goes once the call runs) instead of showing the session as working.
+    if (!next.signal.aborted) {
+      flaggedAsks.add(e.tool_use_id)
+      report($, 'PermissionAsk', { ...fields, tool_use_id: e.tool_use_id })
+    }
     return verdict
   }).catch(($, e, next) => next(e))
 
-  // A shift+tab shows the new mode in the prompt hint for a moment: follow it.
+  // Follow shift+tab through the prompt hint, once a hint has stood long enough to be read.
   on('ui.render', { component: 'PromptHint' }, ($, e, next) => {
     const mode = modeFromHint(e.props.hint)
-    if (mode) permissionMode = mode
+    const seq = ++hintSeq
+    if (mode) $.clock.after(HINT_SETTLE_MS, () => { if (seq === hintSeq) permissionMode = mode })
     return next(e)
+  })
+
+  // A held call is asked in the terminal too, in the band above the prompt: 1, 2 or 3
+  // answers it from an empty prompt, as a survey's rows do.
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    const ask = (await read($, HELD))[0]
+    if (!ask || e.props.hasSurvey) return next(e)
+    const answer = (choice: 'allow' | 'deny' | 'terminal') => () => { terminalAnswers.get(ask.id)?.(choice) }
+    const { Box, Text, Button } = $.ui.resolve(e)
+    return h(Box, { flexDirection: 'column', borderStyle: 'round', borderColor: 'warning', paddingX: 1 },
+      h(Text, {}, h(Text, { bold: true }, `Allow ${ask.tool}?`), h(Text, { dimColor: true }, '  Glaude is asking too')),
+      h(Text, { wrap: 'truncate-end' }, ask.detail),
+      h(Box, { flexDirection: 'row', gap: 3 },
+        h(Button, { key: 'allow', hotkey: '1', plain: true, onPress: answer('allow') }, 'Allow'),
+        h(Button, { key: 'deny', hotkey: '2', plain: true, onPress: answer('deny') }, 'Deny'),
+        h(Button, { key: 'terminal', hotkey: '3', plain: true, onPress: answer('terminal') }, 'Use the terminal prompt'))) as RenderElement
   })
 
   // The terminal draws a run-in-background pill under a call that's running: by then

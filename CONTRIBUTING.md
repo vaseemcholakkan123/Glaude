@@ -54,8 +54,11 @@ Every long-poll answers within 25 s, because a mod's `$.http.fetch` gives up at 
 The kit's tests can't produce a real tool call's `tool_use_id`, so check the permission path in a live session in default mode:
 
 1. A command or file write that asks for permission shows Glaude's **Allow …?** card, and answering in the terminal clears it.
-2. With `answerPermissions` on (`/plugin configure glaude@glaude`), **Allow** and **Deny** in Glaude decide the call.
-3. Still with `answerPermissions` on, switch to auto mode (shift+tab). A call the classifier approves runs without waiting on Glaude, and one that still needs you shows a card with **Open terminal**, not Allow/Deny.
+2. With `answerPermissions` on (`/plugin configure glaude@glaude`) and the session in manual mode, a call that asks shows Glaude's **Allow/Deny** card and a band above the terminal's prompt (**1** Allow, **2** Deny, **3** Use the terminal prompt). Answering in either place runs or refuses the call and takes the other one down, and the bubble ends on the green check.
+3. Pressing **3** (or **Answer in terminal** in Glaude) brings up Claude Code's own dialog, and Glaude shows **Waiting for you in the terminal** with an orange bubble.
+4. Still with `answerPermissions` on, switch to auto mode (shift+tab). A call the classifier approves runs without waiting on Glaude, and one that still needs you shows a card with **Open terminal**, not Allow/Deny.
+
+To see what the mod decides, `claude --plugin-dir mod` loads your working copy in place of the installed plugin.
 
 ## Releasing
 

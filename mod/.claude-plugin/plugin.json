@@ -1,6 +1,6 @@
 {
   "name": "glaude",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "description": "Connects Claude Code to the Glaude desktop companion: a floating bubble that shows when Claude is working, done, or needs you, and lets you reply from it.",
   "author": {
     "name": "Vaseem Cholakkan",
@@ -9,6 +9,7 @@
   "homepage": "https://github.com/vaseemcholakkan123/Glaude",
   "repository": "https://github.com/vaseemcholakkan123/Glaude",
   "license": "MIT",
+  "types": "./types/index.d.ts",
   "keywords": [
     "macos",
     "notifications",
@@ -19,7 +20,7 @@
     "answerPermissions": {
       "type": "boolean",
       "title": "Answer permission prompts in Glaude",
-      "description": "Show Allow/Deny buttons in Glaude for permission prompts. Claude waits for your answer there (up to 2 minutes, then the terminal prompt appears). In auto mode Glaude never holds a call: the auto-mode classifier still decides, and Glaude only shows a notice.",
+      "description": "In manual mode, ask permission prompts in Glaude and in the terminal at once (Allow/Deny in Glaude, or 1, 2, 3 in the terminal); the first answer wins, and after 2 minutes Claude Code's own prompt appears. In auto mode Glaude never holds a call.",
       "default": false
     },
     "notifications": {

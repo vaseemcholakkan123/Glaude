@@ -13,6 +13,8 @@ type FakeApp = {
   running: boolean
   submitted: string[]
   clock: MockClock
+  /** Makes the next status update this slow to answer, in ms. */
+  slowNextEvent?: number
 }
 
 const PROJECT = { cwd: '/work/project', surface: 'terminal' as const, isInteractive: true }
@@ -43,9 +45,13 @@ function fakeApp(on: On): FakeApp {
     const ok = (status: number, json?: unknown) =>
       ({ value: { status, ok: status < 300, headers: {}, text: json === undefined ? '' : JSON.stringify(json) } }) as never
     switch (url.pathname) {
-      case '/event':
+      case '/event': {
+        const delay = app.slowNextEvent
+        app.slowNextEvent = undefined
+        if (delay) await clock.sleep(delay)
         app.events.push(body)
         return ok(200)
+      }
       case '/reply/next': {
         const text = app.replies.shift()
         if (text) return ok(200, { text })
@@ -104,6 +110,15 @@ test('replies stop once the person leaves the session', async ($, on) => {
   app.replies.push('too late')
   await app.clock.advance(25_000)
   expect(app.submitted).not.toContain('too late')
+})
+
+test('updates reach Glaude in the order they happened, even when one is slow', async ($, on) => {
+  const app = fakeApp(on)
+  app.slowNextEvent = 5_000 // SessionStart is slow; the prompt after it must not overtake it
+  await $.session.start(PROJECT)
+  await $.prompt.submit({ text: 'fix the build' } as never)
+  await app.clock.advance(6_000)
+  expect(eventNames(app).slice(0, 2)).toEqual(['SessionStart', 'UserPromptSubmit'])
 })
 
 test('prompts and finished turns are reported', async ($, on) => {
@@ -203,12 +218,14 @@ test('the starting permission mode is read from the command line', () => {
   expect(launchMode('claude --resume 1d77771d')).toBeUndefined()
 })
 
-test('a shift+tab mode switch is read from the prompt hint', () => {
-  expect(modeFromHint('auto mode on (shift+tab to cycle) · ⧉ notes')).toBe('auto')
-  expect(modeFromHint('manual mode on · ⧉ notes')).toBe('default')
-  expect(modeFromHint('accept edits on (shift+tab to cycle)')).toBe('acceptEdits')
-  expect(modeFromHint('plan mode on (shift+tab to cycle)')).toBe('plan')
-  expect(modeFromHint('focus mode on (shift+tab to cycle)')).toBe('unknown')
-  expect(modeFromHint('(shift+tab to cycle) · ⧉ notes')).toBeUndefined()
+test('the mode is read from the settled prompt hint, not the label a shift+tab flashes', () => {
+  // As drawn on Claude Code 2.1.309: every mode but manual keeps "(shift+tab to cycle)".
+  expect(modeFromHint('(shift+tab to cycle) · ← for agents')).toBe('other')
+  expect(modeFromHint('(shift+tab to cycle)')).toBe('other')
+  expect(modeFromHint('← for agents')).toBe('default')
+  expect(modeFromHint('')).toBe('default')
+  // The flash names the mode being left, so it says nothing about the new one.
+  expect(modeFromHint('manual mode on · ← for agents')).toBeUndefined()
+  expect(modeFromHint('auto mode on (shift+tab to cycle)')).toBe('other')
   expect(modeFromHint('Pasting…')).toBeUndefined()
 })

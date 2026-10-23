@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.5]
+
+- **Answer permissions in Glaude or in the terminal.** With `answerPermissions` on, a held call is now asked in both places at once: **Allow/Deny** in Glaude, and a band above the terminal's prompt where **1**, **2** or **3** answers it (3 brings up Claude Code's own dialog). The first answer wins and takes the other one down.
+- **Holding follows the real mode.** Glaude now reads the mode from the hint under the prompt once it settles, and holds calls only in manual mode. 0.2.3 read the label a shift+tab flashes, which names the mode being left, so it could miss manual mode.
+- **No more spinning after a turn is done.** Glaude's status updates now arrive in the order they happened. A slow one could land after "turn finished" and show a finished session as working.
+- When a held call goes back to the terminal (no answer in 2 minutes, **Answer in terminal**, or **3**), Glaude says it's waiting for you in the terminal instead of showing the session as working.
+
 ## [0.2.4]
 
 - Fixes a crash at launch in 0.2.3: placing the bubble moved the done card before it existed.
