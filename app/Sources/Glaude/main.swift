@@ -102,9 +102,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         server.start()
 
         setUpChat()
-        setUpBubble()
-        peek = FloatingPanel(size: NSSize(width: 288, height: 120))
+        peek = FloatingPanel(size: NSSize(width: 288, height: 120))  // before the bubble: placing it moves the peek
         peek.hasShadow = false
+        setUpBubble()
         setUpStatusItem()
 
         store.onDone = { [weak self] session in self?.sessionFinished(session) }

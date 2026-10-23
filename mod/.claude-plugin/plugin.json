@@ -1,6 +1,6 @@
 {
   "name": "glaude",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "Connects Claude Code to the Glaude desktop companion: a floating bubble that shows when Claude is working, done, or needs you, and lets you reply from it.",
   "author": {
     "name": "Vaseem Cholakkan",

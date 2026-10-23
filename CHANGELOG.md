@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.2.4]
+
+- Fixes a crash at launch in 0.2.3: placing the bubble moved the done card before it existed.
+
 ## [0.2.3]
 
 - **`answerPermissions` no longer stalls auto mode.** With the option on, Glaude held every call that asked for permission until you clicked Allow, which also kept the auto-mode classifier from deciding: the terminal showed no prompt and the call waited. Glaude now only holds calls in modes where the terminal would ask you (default and accept edits). In auto mode, and in any mode it can't identify, it shows a notice and never blocks. It follows the mode a session starts in and each shift+tab switch.
